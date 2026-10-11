@@ -113,9 +113,9 @@ mod tests {
         assert_eq!(stable_bookmark_hash(""), "0ztntfp");
         assert_eq!(stable_bookmark_hash("fig:overview"), "1ec4keq");
         assert_eq!(stable_bookmark_hash("tbl:results"), "1me3ew5");
-        assert_eq!(stable_bookmark_hash("\u{1F680}id"), "0wslqqt");
+        assert_eq!(stable_bookmark_hash("🚀id"), "0wslqqt");
         assert_eq!(
-            stable_bookmark_hash(&format!("{}cap", "\u{1F600}".repeat(3))),
+            stable_bookmark_hash(&format!("{}cap", "😀".repeat(3))),
             "0btmbg8"
         );
         assert_eq!(stable_bookmark_hash("[\n\t]"), "18ndb3m");
