@@ -1,0 +1,294 @@
+            self.write_quote_paragraph(xml, &[], &ctx, true)?;
+        }
+        if block.children.is_empty() {
+            if block.callout.is_none() {
+                self.write_quote_paragraph(xml, &[], &ctx, false)?;
+            }
+            return Ok(());
+        }
+        for child in &block.children {
+            self.write_block(xml, child, Some(&ctx))?;
+        }
+        Ok(())
+    }
+
+    fn write_rule(
+        &mut self,
+        xml: &mut Xml,
+        quote: Option<&QuoteCtx>,
+        list_indent: Option<u32>,
+    ) -> Result<(), MarkdownConversionError> {
+        xml.start("w:p", &[])?;
+        xml.start("w:pPr", &[])?;
+        xml.start("w:pBdr", &[])?;
+        let space = "1";
+        xml.empty(
+            "w:bottom",
+            &[
+                ("w:val", "single"),
+                ("w:color", "A6A6A6"),
+                ("w:sz", "6"),
+                ("w:space", space),
+            ],
+        )?;
+        if quote.is_some() {
+            let color = quote_border(quote);
+            xml.empty(
+                "w:left",
+                &[("w:val", "single"), ("w:color", color), ("w:sz", "3")],
+            )?;
+        }
+        xml.end("w:pBdr")?;
+        if let Some(quote) = quote {
+            if let Some(fill) = callout_fill(quote.callout.as_ref()) {
+                xml.empty("w:shd", &[("w:fill", fill)])?;
+            }
+            xml.empty("w:bidi", &[("w:val", "false")])?;
+            spacing(xml, 240, 240, None, None)?;
+            let left = quote.level * 720 + list_indent.unwrap_or(0);
+            indent(xml, left)?;
+        } else {
+            spacing(xml, 120, 120, None, None)?;
+            if let Some(left) = list_indent {
+                indent(xml, left)?;
+            }
+        }
+        xml.end("w:pPr")?;
+        self.write_pending_ref(xml)?;
+        xml.end("w:p")
+    }
+
+    fn write_code_block(
+        &mut self,
+        xml: &mut Xml,
+        code: &CodeBlock,
+    ) -> Result<(), MarkdownConversionError> {
+        let chrome = code_chrome(code);
+        xml.start("w:p", &[])?;
+        xml.start("w:pPr", &[])?;
+        xml.start("w:pBdr", &[])?;
+        for side in ["w:top", "w:bottom", "w:left", "w:right"] {
+            xml.empty(
+                side,
+                &[
+                    ("w:val", "single"),
+                    ("w:color", chrome.border.as_str()),
+                    ("w:sz", "1"),
+                ],
+            )?;
+        }
+        xml.end("w:pBdr")?;
+        xml.empty("w:shd", &[("w:fill", chrome.fill.as_str())])?;
+        xml.empty("w:bidi", &[("w:val", "false")])?;
+        spacing(xml, 240, 240, Some(360), Some("exact"))?;
+        indent(xml, 360)?;
+        xml.empty("w:jc", &[("w:val", "left")])?;
+        xml.end("w:pPr")?;
+        self.write_pending_ref(xml)?;
+        let (label_size, line_size) = self.code_sizes();
+        if chrome.show_label {
+            if let Some(language) = code
+                .language
+                .as_deref()
+                .filter(|language| !language.is_empty())
+            {
+                self.write_code_run(
+                    xml,
+                    language,
+                    label_size,
+                    Some(&chrome.label_color),
+                    true,
+                    false,
+                )?;
+                self.write_code_run(xml, "\n", label_size, None, false, true)?;
+            }
+        }
+        let highlights = code_highlights(code);
+        if highlights.is_empty() {
+            let normalized = code.value.replace("\r\n", "\n").replace('\r', "\n");
+            let lines: Vec<&str> = normalized.split('\n').collect();
+            for (index, line) in lines.iter().enumerate() {
+                self.write_code_run(
+                    xml,
+                    &leading_nbsp(line),
+                    line_size,
+                    Some(&chrome.plain_color),
+                    false,
+                    false,
+                )?;
+                if index + 1 < lines.len() {
+                    self.write_code_run(xml, "\n", line_size, None, false, true)?;
+                }
+            }
+        } else {
+            self.write_highlight_spans(xml, &highlights, line_size)?;
+        }
+        xml.end("w:p")
+    }
+
+    /// Parser highlight spans already carry the theme color. Empty spans keep
+    /// the plain code color, so highlighting that is off adds no token color.
+    fn write_highlight_spans(
+        &mut self,
+        xml: &mut Xml,
+        spans: &[HighlightPaint],
+        size: u32,
+    ) -> Result<(), MarkdownConversionError> {
+        let mut line_start = true;
+        for span in spans {
+            let parts: Vec<&str> = span.text.split('\n').collect();
+            for (index, segment) in parts.iter().enumerate() {
+                if !segment.is_empty() {
+                    let text = if line_start {
+                        leading_nbsp(segment)
+                    } else {
+                        (*segment).to_string()
+                    };
+                    self.write_code_run(xml, &text, size, span.color.as_deref(), false, false)?;
+                    line_start = false;
+                }
+                if index + 1 < parts.len() {
+                    self.write_code_run(xml, "\n", size, None, false, true)?;
+                    line_start = true;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_code_run(
+        &mut self,
+        xml: &mut Xml,
+        text: &str,
+        size: u32,
+        color: Option<&str>,
+        bold: bool,
+        is_break: bool,
+    ) -> Result<(), MarkdownConversionError> {
+        xml.start("w:r", &[])?;
+        xml.start("w:rPr", &[])?;
+        if bold {
+            xml.empty("w:b", &[])?;
+            xml.empty("w:bCs", &[])?;
+        }
+        if let Some(color) = color {
+            xml.empty("w:color", &[("w:val", color)])?;
+        }
+        let size = size.to_string();
+        xml.empty("w:sz", &[("w:val", &size)])?;
+        xml.empty("w:szCs", &[("w:val", &size)])?;
+        xml.empty("w:rtl", &[("w:val", "false")])?;
+        courier(xml)?;
+        xml.empty("w:shd", &[("w:fill", "F5F5F5")])?;
+        xml.end("w:rPr")?;
+        if is_break {
+            xml.empty("w:br", &[])?;
+        }
+        xml.text_elem(text)?;
+        xml.end("w:r")
+    }
+
+    fn write_table(&mut self, xml: &mut Xml, table: &Table) -> Result<(), MarkdownConversionError> {
+        let placed = place_table(table);
+        let columns = placed
+            .iter()
+            .flat_map(|(_, cells)| cells.iter())
+            .map(|cell| cell.column + cell.column_span as usize)
+            .max()
+            .unwrap_or(0);
+        if columns == 0 {
+            return Ok(());
+        }
+        let widths = column_widths(table);
+        let table_width = widths
+            .map(|widths| widths.iter().take(columns).sum::<u32>())
+            .filter(|width| *width > 0)
+            .unwrap_or(self.content_width);
+        let layout = if widths.is_some() { "fixed" } else { "autofit" };
+        xml.start("w:tbl", &[])?;
+        xml.start("w:tblPr", &[])?;
+        let width = table_width.to_string();
+        xml.empty("w:tblW", &[("w:type", "dxa"), ("w:w", &width)])?;
+        xml.start("w:tblBorders", &[])?;
+        for side in [
+            "w:top",
+            "w:left",
+            "w:bottom",
+            "w:right",
+            "w:insideH",
+            "w:insideV",
+        ] {
+            xml.empty(
+                side,
+                &[("w:val", "single"), ("w:color", "auto"), ("w:sz", "4")],
+            )?;
+        }
+        xml.end("w:tblBorders")?;
+        xml.empty("w:tblLayout", &[("w:type", layout)])?;
+        xml.start("w:tblCellMar", &[])?;
+        for side in ["w:top", "w:left", "w:bottom", "w:right"] {
+            xml.empty(side, &[("w:type", "dxa"), ("w:w", "100")])?;
+        }
+        xml.end("w:tblCellMar")?;
+        xml.end("w:tblPr")?;
+        xml.start("w:tblGrid", &[])?;
+        for index in 0..columns {
+            let column = widths
+                .and_then(|widths| widths.get(index).copied())
+                .unwrap_or(100);
+            let column = column.to_string();
+            xml.empty("w:gridCol", &[("w:w", &column)])?;
+        }
+        xml.end("w:tblGrid")?;
+        let split = table_row_split(table);
+        for (header, cells) in &placed {
+            self.write_placed_row(xml, cells, &table.align, *header, widths, split)?;
+        }
+        xml.end("w:tbl")
+    }
+
+    fn write_placed_row(
+        &mut self,
+        xml: &mut Xml,
+        cells: &[PlacedCell<'_>],
+        align: &[TableAlign],
+        header: bool,
+        widths: Option<&[u32]>,
+        split: bool,
+    ) -> Result<(), MarkdownConversionError> {
+        xml.start("w:tr", &[])?;
+        xml.start("w:trPr", &[])?;
+        if split {
+            xml.empty("w:cantSplit", &[("w:val", "false")])?;
+        } else {
+            xml.empty("w:cantSplit", &[])?;
+        }
+        if header {
+            xml.empty("w:tblHeader", &[])?;
+        } else {
+            xml.empty("w:tblHeader", &[("w:val", "false")])?;
+        }
+        xml.end("w:trPr")?;
+        let header_fill = "F2F2F2";
+        for cell in cells {
+            let jc = jc_val(align.get(cell.column).copied());
+            xml.start("w:tc", &[])?;
+            xml.start("w:tcPr", &[])?;
+            if let Some(widths) = widths {
+                let span = cell.column_span as usize;
+                let size = widths.iter().skip(cell.column).take(span).sum::<u32>();
+                if size > 0 {
+                    let size = size.to_string();
+                    xml.empty("w:tcW", &[("w:type", "dxa"), ("w:w", &size)])?;
+                }
+            }
+            let span = cell.column_span.max(1).to_string();
+            xml.empty("w:gridSpan", &[("w:val", &span)])?;
+            match cell.merge {
+                CellMerge::Restart => {
+                    xml.empty("w:vMerge", &[("w:val", "restart")])?;
+                }
+                CellMerge::Continue => {
+                    xml.empty("w:vMerge", &[("w:val", "continue")])?;
+                }
+                CellMerge::None => {}
