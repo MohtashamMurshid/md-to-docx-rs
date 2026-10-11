@@ -1,0 +1,294 @@
+    }
+
+    fn write_simple_field(
+        &mut self,
+        xml: &mut Xml,
+        instruction: &str,
+        cached: &str,
+        look: &Look,
+    ) -> Result<(), MarkdownConversionError> {
+        xml.start("w:fldSimple", &[("w:instr", instruction)])?;
+        self.write_marked_run(
+            xml,
+            cached,
+            Marks {
+                bold: look.force_bold,
+                italic: look.force_italic,
+                underline: false,
+                strike: false,
+                color: look.color.unwrap_or("000000"),
+                size: look.size.unwrap_or(24),
+                courier: false,
+                shade: None,
+            },
+        )?;
+        xml.end("w:fldSimple")
+    }
+
+    fn caption_text(&self, kind: CaptionKind) -> String {
+        let custom = self
+            .caption_options
+            .as_ref()
+            .and_then(|options| match kind {
+                CaptionKind::Figure => options.figure_label.as_deref(),
+                CaptionKind::Table => options.table_label.as_deref(),
+            });
+        match custom {
+            Some(label) => label.to_string(),
+            None => caption_label(kind).to_string(),
+        }
+    }
+
+    fn caption_align_name(&self) -> &'static str {
+        self.caption_options
+            .as_ref()
+            .and_then(|options| options.alignment)
+            .map(alignment_name)
+            .unwrap_or("center")
+    }
+
+    fn caption_marks(&self, size: u32) -> Marks {
+        Marks {
+            bold: false,
+            italic: self
+                .caption_options
+                .as_ref()
+                .and_then(|options| options.italic)
+                .unwrap_or(false),
+            underline: false,
+            strike: false,
+            color: "000000",
+            size,
+            courier: false,
+            shade: None,
+        }
+    }
+
+    fn caption_size(&self) -> u32 {
+        if let Some(size) = self
+            .caption_options
+            .as_ref()
+            .and_then(|options| options.size)
+        {
+            return size.max(1);
+        }
+        self.active_style
+            .as_ref()
+            .and_then(|style| style.paragraph_size)
+            .unwrap_or(24)
+            .max(1)
+    }
+
+    fn caption_spacing(&self) -> (u32, u32, u32) {
+        let Some(style) = &self.active_style else {
+            return (120, 240, 276);
+        };
+        let after = style.paragraph_spacing;
+        let line = (style.line_spacing * 240.0).round() as u32;
+        (after / 2, after, line.max(1))
+    }
+
+    fn write_image_block(
+        &mut self,
+        xml: &mut Xml,
+        image: &Image,
+        quote: Option<&QuoteCtx>,
+    ) -> Result<(), MarkdownConversionError> {
+        if let Some(quote) = quote {
+            xml.start("w:p", &[])?;
+            xml.start("w:pPr", &[])?;
+            write_quote_frame(xml, quote)?;
+            spacing(xml, 240, 240, None, None)?;
+            indent(xml, 720 * quote.level)?;
+            xml.end("w:pPr")?;
+            self.write_pending_ref(xml)?;
+            self.write_image_value(xml, image)?;
+            return xml.end("w:p");
+        }
+        let (before, after, line) = self.body_spacing();
+        let align = self.body_align();
+        let bidi = self.bidi_val();
+        xml.start("w:p", &[])?;
+        xml.start("w:pPr", &[])?;
+        xml.empty("w:bidi", &[("w:val", bidi)])?;
+        spacing(xml, before, after, Some(line), None)?;
+        xml.empty("w:jc", &[("w:val", align)])?;
+        xml.end("w:pPr")?;
+        self.write_pending_ref(xml)?;
+        self.write_image_value(xml, image)?;
+        xml.end("w:p")
+    }
+
+    fn write_listed_image(
+        &mut self,
+        xml: &mut Xml,
+        image: &Image,
+        level: u32,
+        num_id: u32,
+        quote: Option<&QuoteCtx>,
+        continuation: bool,
+    ) -> Result<(), MarkdownConversionError> {
+        xml.start("w:p", &[])?;
+        xml.start("w:pPr", &[])?;
+        if !continuation {
+            let ilvl = level.to_string();
+            let num = num_id.to_string();
+            xml.empty("w:pStyle", &[("w:val", "ListParagraph")])?;
+            xml.start("w:numPr", &[])?;
+            xml.empty("w:ilvl", &[("w:val", &ilvl)])?;
+            xml.empty("w:numId", &[("w:val", &num)])?;
+            xml.end("w:numPr")?;
+        }
+        if let Some(quote) = quote {
+            write_quote_frame(xml, quote)?;
+            spacing(xml, 240, 240, None, None)?;
+            indent(xml, 720 * quote.level)?;
+        } else if continuation {
+            xml.empty("w:bidi", &[("w:val", "false")])?;
+            spacing(xml, 120, 120, None, None)?;
+            indent(xml, 720 * (level + 1))?;
+        } else {
+            xml.empty("w:bidi", &[("w:val", "false")])?;
+            spacing(xml, 120, 120, None, None)?;
+        }
+        xml.end("w:pPr")?;
+        self.write_pending_ref(xml)?;
+        self.write_image_value(xml, image)?;
+        xml.end("w:p")
+    }
+
+    /// A loaded raster becomes a drawing and a `word/media` part. Missing bytes
+    /// stay the red placeholder. SVG and WebP are already PNG when they arrive.
+    fn write_image_value(
+        &mut self,
+        xml: &mut Xml,
+        image: &Image,
+    ) -> Result<(), MarkdownConversionError> {
+        let Some(bytes) = image.bytes.as_deref().filter(|bytes| !bytes.is_empty()) else {
+            return self.write_missing_image(xml, &image.alt);
+        };
+        let (hint_width, hint_height) = image_hints(&image.url);
+        self.embed_raster(
+            xml,
+            image.alt.as_str(),
+            image_title(image),
+            bytes,
+            &image.content_type,
+            nonzero(image.width_px),
+            nonzero(image.height_px),
+            hint_width,
+            hint_height,
+        )
+    }
+
+    fn write_image(
+        &mut self,
+        xml: &mut Xml,
+        url: &str,
+        alt: &str,
+        title: Option<&str>,
+    ) -> Result<(), MarkdownConversionError> {
+        let (hint_width, hint_height) = image_hints(url);
+        let (bytes, _, content_type) = match decode_image(url) {
+            Ok(image) => image,
+            Err(err) if self.in_footnote => return Err(err),
+            Err(_) => return self.write_missing_image(xml, alt),
+        };
+        self.embed_raster(
+            xml,
+            alt,
+            title,
+            &bytes,
+            content_type,
+            None,
+            None,
+            hint_width,
+            hint_height,
+        )
+    }
+
+    fn embed_raster(
+        &mut self,
+        xml: &mut Xml,
+        alt: &str,
+        title: Option<&str>,
+        bytes: &[u8],
+        content_type: &str,
+        known_width: Option<u32>,
+        known_height: Option<u32>,
+        hint_width: Option<u32>,
+        hint_height: Option<u32>,
+    ) -> Result<(), MarkdownConversionError> {
+        let sniffed = sniff_raster(bytes);
+        let extension = sniffed
+            .map(|raster| raster.extension)
+            .unwrap_or_else(|| extension_for_content_type(content_type));
+        self.store_and_draw(
+            xml,
+            alt,
+            title,
+            bytes,
+            extension,
+            hint_width,
+            hint_height,
+            sniffed,
+            known_width,
+            known_height,
+        )
+    }
+
+    fn store_and_draw(
+        &mut self,
+        xml: &mut Xml,
+        alt: &str,
+        title: Option<&str>,
+        bytes: &[u8],
+        extension: &str,
+        hint_width: Option<u32>,
+        hint_height: Option<u32>,
+        sniffed: Option<RasterKind>,
+        known_width: Option<u32>,
+        known_height: Option<u32>,
+    ) -> Result<(), MarkdownConversionError> {
+        if let Some((extension, content_type)) = static_media_type(extension) {
+            if !self
+                .media_types
+                .iter()
+                .any(|(existing, _)| *existing == extension)
+            {
+                self.media_types.push((extension, content_type));
+            }
+        }
+        let name = format!("image{}.{extension}", self.media.len() + 1);
+        let token = format!("rId{{{name}}}");
+        self.media
+            .push((format!("word/media/{name}"), bytes.to_vec()));
+        let (width, height) = display_pixels(
+            sniffed.and_then(|raster| raster.width).or(known_width),
+            sniffed.and_then(|raster| raster.height).or(known_height),
+            hint_width,
+            hint_height,
+        );
+        self.write_drawing(xml, &token, alt, title, width, height)
+    }
+
+    fn write_drawing(
+        &mut self,
+        xml: &mut Xml,
+        embed: &str,
+        alt: &str,
+        title: Option<&str>,
+        width: u32,
+        height: u32,
+    ) -> Result<(), MarkdownConversionError> {
+        self.drawing_id = self.drawing_id.saturating_add(1);
+        let id = self.drawing_id.to_string();
+        let name = drawing_name(alt, title);
+        let cx = (u64::from(width) * EMU_PER_PIXEL).to_string();
+        let cy = (u64::from(height) * EMU_PER_PIXEL).to_string();
+        xml.start("w:r", &[])?;
+        xml.start("w:drawing", &[])?;
+        xml.start(
+            "wp:inline",
+            &[
+                ("distT", "0"),
