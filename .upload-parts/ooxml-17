@@ -1,0 +1,294 @@
+                MdEvent::Text(text) | MdEvent::Code(text) => alt.push_str(&text),
+                MdEvent::SoftBreak => alt.push(' '),
+                MdEvent::HardBreak => alt.push('\n'),
+                _ => {}
+            }
+            continue;
+        }
+        if let MdEvent::Start(Tag::Image {
+            title: image_title, ..
+        }) = event
+        {
+            title = if image_title.is_empty() {
+                None
+            } else {
+                Some(image_title.to_string())
+            };
+            alt.clear();
+            depth = 1;
+        }
+    }
+    labels
+}
+
+fn stamp_blocks(blocks: &mut [Block], labels: &mut impl Iterator<Item = ImageLabel>) {
+    for block in blocks {
+        match block {
+            Block::Image(_) => {
+                let _ = labels.next();
+            }
+            Block::Paragraph(paragraph) => stamp_runs(&mut paragraph.children, labels),
+            Block::Heading(heading) => stamp_runs(&mut heading.children, labels),
+            Block::Caption(caption) => stamp_runs(&mut caption.children, labels),
+            Block::List(list) => {
+                for item in &mut list.children {
+                    stamp_blocks(&mut item.children, labels);
+                }
+            }
+            Block::Blockquote(quote) => stamp_blocks(&mut quote.children, labels),
+            Block::FootnoteDefinition { children, .. } => stamp_blocks(children, labels),
+            Block::Table(table) => {
+                for cell in table
+                    .header
+                    .iter_mut()
+                    .chain(table.rows.iter_mut().flatten())
+                {
+                    stamp_runs(&mut cell.children, labels);
+                }
+            }
+            Block::CodeBlock(_)
+            | Block::ThematicBreak
+            | Block::PageBreak
+            | Block::Comment(_)
+            | Block::DisplayMath { .. }
+            | Block::ChartImage { .. } => {}
+        }
+    }
+}
+
+fn stamp_runs(runs: &mut [Inline], labels: &mut impl Iterator<Item = ImageLabel>) {
+    for run in runs {
+        if let Some(rest) = run.text.strip_prefix(IMAGE_MARK) {
+            let Some(label) = labels.next() else {
+                continue;
+            };
+            if rest.contains(IMAGE_MARK) {
+                continue;
+            }
+            let title = label.title.unwrap_or_default();
+            run.text = format!(
+                "{IMAGE_MARK}{rest}{IMAGE_MARK}{}{IMAGE_MARK}{title}",
+                label.alt
+            );
+            continue;
+        }
+        if run.text.starts_with("[Image could not be displayed") {
+            let _ = labels.next();
+        }
+    }
+}
+
+fn image_title(image: &Image) -> Option<&str> {
+    image.title.as_deref().filter(|text| !text.is_empty())
+}
+
+fn drawing_name(alt: &str, title: Option<&str>) -> String {
+    if let Some(title) = title.map(str::trim).filter(|text| !text.is_empty()) {
+        return title.to_string();
+    }
+    let alt = alt.trim();
+    if alt.is_empty() {
+        "Image".to_string()
+    } else {
+        alt.to_string()
+    }
+}
+
+fn static_media_type(extension: &str) -> Option<(&'static str, &'static str)> {
+    match extension {
+        "png" => Some(("png", "image/png")),
+        "jpeg" => Some(("jpeg", "image/jpeg")),
+        "gif" => Some(("gif", "image/gif")),
+        "webp" => Some(("webp", "image/webp")),
+        "bmp" => Some(("bmp", "image/bmp")),
+        "bin" => Some(("bin", "application/octet-stream")),
+        _ => None,
+    }
+}
+
+fn image_hints(url: &str) -> (Option<u32>, Option<u32>) {
+    let Some((_, fragment)) = url.rsplit_once('#') else {
+        return (None, None);
+    };
+    if let Some((width, height)) = fragment.split_once('x') {
+        if let (Some(width), Some(height)) = (positive_u32(width), positive_u32(height)) {
+            if !height_has_query(height_text(fragment)) {
+                return (Some(width), Some(height));
+            }
+        }
+    }
+    let query = fragment.replace("&amp;", "&");
+    let mut width = None;
+    let mut height = None;
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        let parsed = positive_u32(value);
+        match key {
+            "w" | "width" => width = parsed,
+            "h" | "height" => height = parsed,
+            _ => {}
+        }
+    }
+    (width, height)
+}
+
+fn height_text(fragment: &str) -> &str {
+    fragment
+        .split_once('x')
+        .map(|(_, height)| height)
+        .unwrap_or("")
+}
+
+fn height_has_query(height: &str) -> bool {
+    height.contains('=') || height.contains('&')
+}
+
+fn positive_u32(text: &str) -> Option<u32> {
+    let value = text.parse::<u32>().ok()?;
+    (value > 0).then_some(value)
+}
+
+fn sniff_raster(bytes: &[u8]) -> Option<RasterKind> {
+    if is_png(bytes) {
+        let (width, height) = png_size(bytes);
+        return Some(RasterKind {
+            extension: "png",
+            content_type: "image/png",
+            width,
+            height,
+        });
+    }
+    if is_jpeg(bytes) {
+        let (width, height) = jpeg_size(bytes);
+        return Some(RasterKind {
+            extension: "jpeg",
+            content_type: "image/jpeg",
+            width,
+            height,
+        });
+    }
+    if is_gif(bytes) {
+        let (width, height) = gif_size(bytes);
+        return Some(RasterKind {
+            extension: "gif",
+            content_type: "image/gif",
+            width,
+            height,
+        });
+    }
+    None
+}
+
+fn is_png(bytes: &[u8]) -> bool {
+    bytes.len() >= 8
+        && bytes[0] == 0x89
+        && bytes[1] == 0x50
+        && bytes[2] == 0x4e
+        && bytes[3] == 0x47
+        && bytes[4] == 0x0d
+        && bytes[5] == 0x0a
+        && bytes[6] == 0x1a
+        && bytes[7] == 0x0a
+}
+
+fn is_jpeg(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff
+}
+
+fn is_gif(bytes: &[u8]) -> bool {
+    bytes.len() >= 6
+        && bytes[0] == b'G'
+        && bytes[1] == b'I'
+        && bytes[2] == b'F'
+        && bytes[3] == b'8'
+        && (bytes[4] == b'7' || bytes[4] == b'9')
+        && bytes[5] == b'a'
+}
+
+fn png_size(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
+    if bytes.len() < 24 {
+        return (None, None);
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    (nonzero(width), nonzero(height))
+}
+
+fn gif_size(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
+    if bytes.len() < 10 {
+        return (None, None);
+    }
+    let width = u32::from(u16::from_le_bytes([bytes[6], bytes[7]]));
+    let height = u32::from(u16::from_le_bytes([bytes[8], bytes[9]]));
+    (nonzero(width), nonzero(height))
+}
+
+fn jpeg_size(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
+    let mut offset = 2;
+    while offset + 9 < bytes.len() {
+        if bytes[offset] != 0xff {
+            break;
+        }
+        let marker = bytes[offset + 1];
+        let length = u16::from_be_bytes([bytes[offset + 2], bytes[offset + 3]]);
+        if marker == 0xc0 || marker == 0xc2 {
+            let height = u32::from(u16::from_be_bytes([bytes[offset + 5], bytes[offset + 6]]));
+            let width = u32::from(u16::from_be_bytes([bytes[offset + 7], bytes[offset + 8]]));
+            return (nonzero(width), nonzero(height));
+        }
+        let step = usize::from(length).saturating_add(2);
+        if step == 0 {
+            break;
+        }
+        offset = offset.saturating_add(step);
+    }
+    (None, None)
+}
+
+fn nonzero(value: u32) -> Option<u32> {
+    (value > 0).then_some(value)
+}
+
+fn display_pixels(
+    intrinsic_width: Option<u32>,
+    intrinsic_height: Option<u32>,
+    hint_width: Option<u32>,
+    hint_height: Option<u32>,
+) -> (u32, u32) {
+    let aspect = match (intrinsic_width, intrinsic_height) {
+        (Some(width), Some(height)) => Some(f64::from(width) / f64::from(height)),
+        _ => None,
+    };
+    let (width, height) = if let (Some(width), Some(height)) = (hint_width, hint_height) {
+        (width, Some(height))
+    } else if let (Some(width), Some(aspect)) = (hint_width, aspect) {
+        (width, Some(round_positive(f64::from(width) / aspect)))
+    } else if let (Some(height), Some(aspect)) = (hint_height, aspect) {
+        (round_positive(f64::from(height) * aspect), Some(height))
+    } else if let Some(width) = intrinsic_width {
+        let width = width.min(400);
+        let height = aspect.map(|aspect| round_positive(f64::from(width) / aspect));
+        (width, height)
+    } else {
+        (200, None)
+    };
+    let width = clamp_dimension(width);
+    let height = clamp_dimension(height.unwrap_or_else(|| round_positive(f64::from(width) * 0.75)));
+    (width, height)
+}
+
+fn round_positive(value: f64) -> u32 {
+    let rounded = value.round();
+    if rounded < 1.0 {
+        1
+    } else if rounded > f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        rounded as u32
+    }
+}
+
+fn clamp_dimension(value: u32) -> u32 {
+    value.clamp(1, MAX_IMAGE_DIMENSION)
