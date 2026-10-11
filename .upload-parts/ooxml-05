@@ -1,0 +1,294 @@
+
+    fn write_toc_title(&mut self, xml: &mut Xml) -> Result<(), MarkdownConversionError> {
+        xml.start("w:p", &[])?;
+        xml.start("w:pPr", &[])?;
+        xml.empty("w:pStyle", &[("w:val", "TOCHeading")])?;
+        xml.empty("w:bidi", &[("w:val", "false")])?;
+        xml.empty("w:spacing", &[("w:after", "240")])?;
+        xml.empty("w:jc", &[("w:val", "center")])?;
+        xml.end("w:pPr")?;
+        xml.start("w:r", &[])?;
+        xml.text_elem(&self.toc_title.clone())?;
+        xml.end("w:r")?;
+        xml.end("w:p")
+    }
+
+    fn write_toc_entry(
+        &mut self,
+        xml: &mut Xml,
+        heading: &TocHeading,
+        first: bool,
+        last: bool,
+    ) -> Result<(), MarkdownConversionError> {
+        let pos = self.content_width.to_string();
+        let leader = if self.toc_dot_leaders { "dot" } else { "none" };
+        let indent =
+            (u32::from(heading.level.saturating_sub(self.toc_min_depth)) * 400).to_string();
+        xml.start("w:p", &[])?;
+        xml.start("w:pPr", &[])?;
+        xml.start("w:tabs", &[])?;
+        xml.empty(
+            "w:tab",
+            &[("w:val", "right"), ("w:pos", &pos), ("w:leader", leader)],
+        )?;
+        xml.end("w:tabs")?;
+        xml.empty("w:bidi", &[("w:val", "false")])?;
+        xml.empty("w:spacing", &[("w:after", "120")])?;
+        xml.empty("w:ind", &[("w:left", &indent)])?;
+        xml.end("w:pPr")?;
+        if self.toc_native && first {
+            let instruction = toc_instruction(
+                self.toc_min_depth,
+                self.toc_max_depth,
+                self.toc_page_numbers,
+            );
+            xml.start("w:r", &[])?;
+            xml.empty(
+                "w:fldChar",
+                &[("w:fldCharType", "begin"), ("w:dirty", "true")],
+            )?;
+            xml.start("w:instrText", &[("xml:space", "preserve")])?;
+            xml.text(&instruction)?;
+            xml.end("w:instrText")?;
+            xml.end("w:r")?;
+            xml.start("w:r", &[])?;
+            xml.empty("w:fldChar", &[("w:fldCharType", "separate")])?;
+            xml.end("w:r")?;
+        }
+        let style = self.toc_entry_look(heading.level);
+        xml.start(
+            "w:hyperlink",
+            &[("w:history", "1"), ("w:anchor", &heading.bookmark)],
+        )?;
+        self.write_toc_run(xml, &heading.text, style)?;
+        xml.end("w:hyperlink")?;
+        if self.toc_native && self.toc_page_numbers {
+            xml.start("w:r", &[])?;
+            xml.empty("w:tab", &[])?;
+            xml.end("w:r")?;
+            let instr = format!(" PAGEREF {} \\h ", heading.bookmark);
+            xml.start("w:fldSimple", &[("w:instr", &instr)])?;
+            xml.start("w:r", &[])?;
+            xml.text_elem("?")?;
+            xml.end("w:r")?;
+            xml.end("w:fldSimple")?;
+        }
+        if self.toc_native && last {
+            xml.start("w:r", &[])?;
+            xml.empty("w:fldChar", &[("w:fldCharType", "end")])?;
+            xml.end("w:r")?;
+        }
+        xml.end("w:p")
+    }
+
+    fn write_toc_run(
+        &mut self,
+        xml: &mut Xml,
+        text: &str,
+        style: TocEntryStyle,
+    ) -> Result<(), MarkdownConversionError> {
+        let size = style.size.to_string();
+        let bold = if style.bold { "true" } else { "false" };
+        xml.start("w:r", &[])?;
+        xml.start("w:rPr", &[])?;
+        if style.bold {
+            xml.empty("w:b", &[])?;
+            xml.empty("w:bCs", &[])?;
+        } else {
+            xml.empty("w:b", &[("w:val", bold)])?;
+            xml.empty("w:bCs", &[("w:val", bold)])?;
+        }
+        if style.italic {
+            xml.empty("w:i", &[])?;
+            xml.empty("w:iCs", &[])?;
+        } else {
+            xml.empty("w:i", &[("w:val", "false")])?;
+            xml.empty("w:iCs", &[("w:val", "false")])?;
+        }
+        xml.empty("w:sz", &[("w:val", &size)])?;
+        xml.empty("w:szCs", &[("w:val", &size)])?;
+        self.write_run_font(xml)?;
+        xml.empty("w:rtl", &[("w:val", self.bidi_val())])?;
+        xml.end("w:rPr")?;
+        xml.text_elem(text)?;
+        xml.end("w:r")
+    }
+
+    fn write_block(
+        &mut self,
+        xml: &mut Xml,
+        block: &Block,
+        quote: Option<&QuoteCtx>,
+    ) -> Result<(), MarkdownConversionError> {
+        match block {
+            Block::Paragraph(paragraph) if is_toc_paragraph(paragraph) => self.write_toc(xml),
+            Block::Paragraph(paragraph) => self.write_paragraph(xml, paragraph, quote),
+            Block::Heading(heading) if self.in_footnote => {
+                self.write_footnote_heading(xml, heading, quote)
+            }
+            Block::Heading(heading) => self.write_heading(xml, heading),
+            Block::List(list) => self.write_list(xml, list, 0, quote),
+            Block::CodeBlock(code) => self.write_code_block(xml, code),
+            Block::Blockquote(blockquote) => self.write_blockquote(xml, blockquote, quote),
+            Block::Table(table) if self.in_footnote => self.write_flat_table(xml, table),
+            Block::Table(table) => self.write_table(xml, table),
+            Block::ThematicBreak => self.write_rule(xml, quote, None),
+            Block::PageBreak => self.write_page_break(xml),
+            Block::Comment(text) => self.write_comment(xml, text, quote),
+            Block::Caption(caption) => self.write_caption(xml, caption),
+            Block::Image(image) => self.write_image_block(xml, image, quote),
+            Block::DisplayMath { omml } => self.write_display_math(xml, omml, quote),
+            Block::ChartImage {
+                bytes,
+                width_px,
+                height_px,
+                alt,
+            } => self.write_chart_image(xml, bytes, *width_px, *height_px, alt, quote),
+            Block::FootnoteDefinition { .. } if self.in_header_footer => Err(
+                MarkdownConversionError::new("Word headers and footers cannot contain footnotes"),
+            ),
+            Block::FootnoteDefinition { .. } => Ok(()),
+        }
+    }
+
+    /// Display math is one paragraph. The parser already produced the OMML.
+    fn write_display_math(
+        &mut self,
+        xml: &mut Xml,
+        omml: &str,
+        quote: Option<&QuoteCtx>,
+    ) -> Result<(), MarkdownConversionError> {
+        self.write_content_paragraph(xml, quote, |_, xml| emit_omml(xml, omml))
+    }
+
+    /// Chart PNG bytes use the same drawing and `word/media` path as images.
+    fn write_chart_image(
+        &mut self,
+        xml: &mut Xml,
+        bytes: &[u8],
+        width_px: u32,
+        height_px: u32,
+        alt: &str,
+        quote: Option<&QuoteCtx>,
+    ) -> Result<(), MarkdownConversionError> {
+        if bytes.is_empty() {
+            return self.write_content_paragraph(xml, quote, |state, xml| {
+                state.write_marked_run(
+                    xml,
+                    "[Chart could not be rendered]",
+                    Marks {
+                        bold: false,
+                        italic: true,
+                        underline: false,
+                        strike: false,
+                        color: "FF0000",
+                        size: state.caption_size(),
+                        courier: false,
+                        shade: None,
+                    },
+                )
+            });
+        }
+        self.write_content_paragraph(xml, quote, |state, xml| {
+            state.embed_raster(
+                xml,
+                alt,
+                None,
+                bytes,
+                "image/png",
+                None,
+                None,
+                nonzero(width_px),
+                nonzero(height_px),
+            )
+        })
+    }
+
+    fn write_content_paragraph(
+        &mut self,
+        xml: &mut Xml,
+        quote: Option<&QuoteCtx>,
+        write_body: impl FnOnce(&mut Self, &mut Xml) -> Result<(), MarkdownConversionError>,
+    ) -> Result<(), MarkdownConversionError> {
+        xml.start("w:p", &[])?;
+        xml.start("w:pPr", &[])?;
+        if let Some(quote) = quote {
+            write_quote_frame(xml, quote)?;
+            spacing(xml, 240, 240, None, None)?;
+            indent(xml, 720 * quote.level)?;
+        } else {
+            let (before, after, line) = self.body_spacing();
+            let align = self.body_align();
+            let bidi = self.bidi_val();
+            xml.empty("w:bidi", &[("w:val", bidi)])?;
+            spacing(xml, before, after, Some(line), None)?;
+            xml.empty("w:jc", &[("w:val", align)])?;
+        }
+        xml.end("w:pPr")?;
+        self.write_pending_ref(xml)?;
+        write_body(self, xml)?;
+        xml.end("w:p")
+    }
+
+    /// `Figure N` / `Table N` as a `SEQ` field inside `caption.bookmark`.
+    ///
+    /// The label and the sequence sit in the bookmark. The colon and the
+    /// caption text follow it. Inline code is not rewritten into a reference.
+    fn write_caption(
+        &mut self,
+        xml: &mut Xml,
+        caption: &Caption,
+    ) -> Result<(), MarkdownConversionError> {
+        let number = self
+            .caption_numbers
+            .get(&caption.bookmark)
+            .copied()
+            .unwrap_or(1);
+        let label = self.caption_text(caption.kind);
+        let sequence = caption_sequence(caption.kind);
+        let size = self.caption_size();
+        let marks = self.caption_marks(size);
+        let look = Look {
+            size: Some(size),
+            force_bold: false,
+            force_italic: marks.italic,
+            color: None,
+        };
+        let (before, after, line) = self.caption_spacing();
+        let bidi = self.bidi_val();
+        let align = self.caption_align_name();
+        xml.start("w:p", &[])?;
+        xml.start("w:pPr", &[])?;
+        xml.empty("w:pStyle", &[("w:val", "Caption")])?;
+        xml.empty("w:bidi", &[("w:val", bidi)])?;
+        spacing(xml, before, after, Some(line), None)?;
+        xml.empty("w:jc", &[("w:val", align)])?;
+        xml.end("w:pPr")?;
+        let bookmark_id = self.next_bookmark_id();
+        if !caption.bookmark.is_empty() {
+            xml.empty(
+                "w:bookmarkStart",
+                &[
+                    ("w:id", bookmark_id.as_str()),
+                    ("w:name", caption.bookmark.as_str()),
+                ],
+            )?;
+        }
+        self.write_marked_run(xml, &format!("{label} "), marks)?;
+        let instruction = format!(" SEQ {sequence} \\* ARABIC ");
+        self.write_simple_field(xml, &instruction, &number.to_string(), &look)?;
+        self.update_fields = true;
+        if !caption.bookmark.is_empty() {
+            xml.empty("w:bookmarkEnd", &[("w:id", bookmark_id.as_str())])?;
+        }
+        self.write_marked_run(xml, ": ", marks)?;
+        self.write_runs(xml, &caption.children, &look)?;
+        xml.end("w:p")
+    }
+
+    fn write_paragraph(
+        &mut self,
+        xml: &mut Xml,
+        paragraph: &Paragraph,
+        quote: Option<&QuoteCtx>,
+    ) -> Result<(), MarkdownConversionError> {
