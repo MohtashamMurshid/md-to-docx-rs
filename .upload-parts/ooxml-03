@@ -1,0 +1,294 @@
+            }
+            Block::FootnoteDefinition { children, .. } => {
+                for child in children {
+                    self.index_caption_block(child);
+                }
+            }
+            Block::Paragraph(_)
+            | Block::Heading(_)
+            | Block::CodeBlock(_)
+            | Block::Table(_)
+            | Block::ThematicBreak
+            | Block::PageBreak
+            | Block::Comment(_)
+            | Block::Image(_)
+            | Block::DisplayMath { .. }
+            | Block::ChartImage { .. } => {}
+        }
+    }
+
+    fn write_section(&self, xml: &mut Xml) -> Result<(), MarkdownConversionError> {
+        xml.start("w:sectPr", &[])?;
+        for rel in &self.story_rels {
+            let Some(reference) = rel.reference else {
+                continue;
+            };
+            let tag = if rel.rel_type.ends_with("/header") {
+                "w:headerReference"
+            } else if rel.rel_type.ends_with("/footer") {
+                "w:footerReference"
+            } else {
+                continue;
+            };
+            xml.empty(tag, &[("w:type", reference), ("r:id", &rel.id)])?;
+        }
+        xml.empty(
+            "w:pgSz",
+            &[
+                ("w:w", PAGE_WIDTH),
+                ("w:h", PAGE_HEIGHT),
+                ("w:orient", "portrait"),
+            ],
+        )?;
+        xml.empty(
+            "w:pgMar",
+            &[
+                ("w:top", "1440"),
+                ("w:right", "1080"),
+                ("w:bottom", "1440"),
+                ("w:left", "1080"),
+                ("w:header", "708"),
+                ("w:footer", "708"),
+                ("w:gutter", "0"),
+            ],
+        )?;
+        xml.end("w:sectPr")
+    }
+
+    fn assign_story_ids(&mut self, has_footnotes: bool) {
+        let mut number = 3 + self.links.len() + usize::from(has_footnotes);
+        for rel in &mut self.story_rels {
+            rel.id = format!("rId{number}");
+            number += 1;
+        }
+    }
+
+    fn attach_default_footer(&mut self) -> Result<(), MarkdownConversionError> {
+        let bytes = write_page_number_story("w:ftr", "center", "current", 24)?;
+        let rels = empty_relationships()?;
+        self.story_parts.push(StoryPart {
+            path: "word/footer1.xml".to_string(),
+            bytes,
+            content_type: Some(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+            ),
+        });
+        self.story_parts.push(StoryPart {
+            path: "word/_rels/footer1.xml.rels".to_string(),
+            bytes: rels,
+            content_type: None,
+        });
+        self.story_rels.push(StoryRel {
+            id: String::new(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer",
+            target: "footer1.xml".to_string(),
+            reference: Some("default"),
+        });
+        Ok(())
+    }
+
+    fn body_look(&self) -> Look {
+        match self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.paragraph_size)
+        {
+            Some(size) => Look::sized(size),
+            None => Look::body(),
+        }
+    }
+
+    fn list_look(&self) -> Look {
+        Look::sized(
+            self.active_style
+                .as_ref()
+                .and_then(|style| style.list_item_size)
+                .unwrap_or(24),
+        )
+    }
+
+    fn quote_size(&self) -> u32 {
+        self.active_style
+            .as_ref()
+            .and_then(|style| style.blockquote_size)
+            .unwrap_or(24)
+    }
+
+    fn code_sizes(&self) -> (u32, u32) {
+        match self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.code_block_size)
+        {
+            Some(size) => (size, size),
+            None => (18, 20),
+        }
+    }
+
+    fn body_spacing(&self) -> (u32, u32, u32) {
+        let Some(style) = &self.active_style else {
+            return (240, 240, 276);
+        };
+        let spacing = style.paragraph_spacing;
+        let line = (style.line_spacing * 240.0).round() as u32;
+        (spacing, spacing, line.max(1))
+    }
+
+    fn body_align(&self) -> &'static str {
+        let align = self.paragraph_align_override.or_else(|| {
+            self.active_style
+                .as_ref()
+                .map(|style| style.paragraph_alignment)
+        });
+        match align {
+            Some(Alignment::Center) => "center",
+            Some(Alignment::Right) => "right",
+            Some(Alignment::Justified) => "both",
+            Some(Alignment::Left) | None => "left",
+        }
+    }
+
+    fn bidi_val(&self) -> &'static str {
+        match self.active_style.as_ref().map(|style| style.direction) {
+            Some(Direction::Rtl) => "true",
+            Some(Direction::Ltr) | None => "false",
+        }
+    }
+
+    fn heading_align(&self, level: u8) -> Option<&'static str> {
+        let style = self.active_style.as_ref()?;
+        let index = usize::from(level.clamp(1, 6) - 1);
+        let align = style.heading_alignments[index].or(style.heading_alignment)?;
+        Some(alignment_name(align))
+    }
+
+    fn heading_half_points(&self, level: u8) -> u32 {
+        let Some(style) = &self.active_style else {
+            return heading_size(level);
+        };
+        let index = usize::from(level.clamp(1, 6) - 1);
+        style.heading_size[index]
+            .map(|size| size.max(1))
+            .unwrap_or_else(|| style.heading_run_size(level))
+    }
+
+    fn toc_entry_look(&self, level: u8) -> TocEntryStyle {
+        let Some(style) = &self.active_style else {
+            return toc_entry_style(level, self.toc_paragraph_size);
+        };
+        let index = usize::from(level.clamp(1, 6) - 1);
+        let size = style.toc_heading_font_size[index]
+            .or(style.toc_font_size)
+            .unwrap_or_else(|| {
+                let base = style
+                    .paragraph_size
+                    .unwrap_or(self.toc_paragraph_size.max(1));
+                base.saturating_sub(u32::from(level.saturating_sub(1)) * 2)
+                    .max(1)
+            });
+        TocEntryStyle {
+            size,
+            bold: style.toc_heading_bold[index].unwrap_or(level == 1),
+            italic: style.toc_heading_italic[index].unwrap_or(false),
+        }
+    }
+
+    fn write_run_font(&self, xml: &mut Xml) -> Result<(), MarkdownConversionError> {
+        let Some(font) = self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.font_family.as_deref())
+            .filter(|font| !font.trim().is_empty())
+        else {
+            return Ok(());
+        };
+        xml.empty(
+            "w:rFonts",
+            &[
+                ("w:ascii", font),
+                ("w:cs", font),
+                ("w:eastAsia", font),
+                ("w:hAnsi", font),
+            ],
+        )
+    }
+
+    fn load_toc_settings(&mut self, settings: &TocSettings) {
+        self.toc_native = settings.mode != TocMode::Links;
+        self.toc_page_numbers = settings.page_numbers;
+        self.toc_dot_leaders = settings.dot_leaders;
+        self.toc_update_on_open = settings.update_fields_on_open;
+        self.toc_title = settings.title.clone();
+        self.toc_min_depth = settings.min_depth;
+        self.toc_max_depth = settings.max_depth;
+        if let Some(size) = self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.paragraph_size)
+        {
+            self.toc_paragraph_size = size;
+        }
+    }
+
+    fn write_prepared_toc(
+        &mut self,
+        xml: &mut Xml,
+        toc: &crate::model::TocBlock,
+    ) -> Result<bool, MarkdownConversionError> {
+        if !toc.primary || toc.headings.is_empty() {
+            return Ok(false);
+        }
+        self.load_toc_settings(&toc.settings);
+        if !self.toc_title.is_empty() {
+            self.write_toc_title(xml)?;
+        }
+        let last = toc.headings.len() - 1;
+        for (index, heading) in toc.headings.iter().enumerate() {
+            let entry = TocHeading {
+                text: heading.text.clone(),
+                level: heading.level,
+                bookmark: heading.bookmark.clone(),
+            };
+            self.write_toc_entry(xml, &entry, index == 0, index == last)?;
+        }
+        Ok(true)
+    }
+
+    fn attach_section_stories(
+        &mut self,
+        section: &PreparedSection,
+    ) -> Result<(), MarkdownConversionError> {
+        self.attach_header_slots(section)?;
+        self.attach_footer_slots(section)?;
+        Ok(())
+    }
+
+    fn attach_header_slots(
+        &mut self,
+        section: &PreparedSection,
+    ) -> Result<(), MarkdownConversionError> {
+        for (reference, slot) in [
+            ("default", &section.headers.default),
+            ("first", &section.headers.first),
+            ("even", &section.headers.even),
+        ] {
+            if let Some(slot) = slot {
+                self.write_story(
+                    true,
+                    reference,
+                    slot,
+                    PageNumberDisplay::None,
+                    Alignment::Left,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn attach_footer_slots(
+        &mut self,
+        section: &PreparedSection,
+    ) -> Result<(), MarkdownConversionError> {
+        let fallback_display = section
+            .page_numbering
+            .as_ref()
