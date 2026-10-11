@@ -999,12 +999,12 @@ mod tests {
 
     #[test]
     fn plugins_key_cannot_be_loaded_from_cli_json() {
-        let error = load_options_json(r#"{\"plugins\":[]}"#, "options.json").unwrap_err();
+        let error = load_options_json(r#"{"plugins":[]}"#, "options.json").unwrap_err();
         assert!(
             error.contains("cannot be passed from JavaScript"),
             "{error}"
         );
-        let null_plugin = load_options_json(r#"{\"plugins\":null}"#, "options.json").unwrap_err();
+        let null_plugin = load_options_json(r#"{"plugins":null}"#, "options.json").unwrap_err();
         assert!(null_plugin.contains("cannot be passed from JavaScript"));
     }
 
@@ -1012,7 +1012,7 @@ mod tests {
     fn rejects_non_objects_and_invalid_json() {
         let invalid = load_options_json("not valid json", "options.json").unwrap_err();
         assert!(invalid.contains("Invalid JSON"), "{invalid}");
-        let array = load_options_json(r#"[\"not\", \"an\", \"object\"]"#, "options.json").unwrap_err();
+        let array = load_options_json(r#"["not", "an", "object"]"#, "options.json").unwrap_err();
         assert!(array.contains("Options JSON must be an object"), "{array}");
     }
 }
