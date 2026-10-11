@@ -292,4 +292,3 @@ impl State {
                 for child in &quote.children {
                     self.index_caption_block(child);
                 }
-            }
