@@ -68,3 +68,11 @@ Highlighting creates more runs and XML in both implementations. Its performance 
 ## Limits of the comparison
 
 These are warmed medians on one host. They do not measure Node addon overhead, event-loop responsiveness, browser use, remote image fetching or every supported option. Different ZIP bytes and plausible XML sizes do not prove identical output. Retain correctness checks alongside future benchmark runs and visually inspect representative documents.
+
+## Changes after these measurements
+
+The compatibility work added real TypeScript/TSX grammars, wired image settings through all conversion paths, and implemented mutable native plugin transforms. The old uncolored TypeScript result no longer describes current behavior. Reference XML operations now reuse fixed regexes and bound the cache for internal generated patterns. Proofing language and RTL properties are applied before ZIP creation, avoiding a second unzip/repack for those options.
+
+Node conversions now run off the event loop; image/chart/Mermaid callbacks can call JavaScript. Existing JavaScript plugins, warning hooks and function/RegExp text replacements use the TypeScript compatibility path. Browser exports use that implementation too. Measure these paths separately; native speedups do not apply to them.
+
+The committed [benchmark harness](development.md#reproducible-native-benchmark) uses new generated fixtures and verifies actual colored TypeScript runs and chart dimensions. Its inputs differ from the historical fixtures, so fresh results require a new same-input TypeScript comparison. No new speedup ratios are claimed here.

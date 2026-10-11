@@ -1,47 +1,60 @@
 # Development and verification
 
-## Workspace
+The workspace separates the native library, CLI and Node binding. `rust-toolchain.toml`, `Cargo.lock` and both npm lockfiles pin the build and test dependencies.
 
-| Crate | Purpose |
-| --- | --- |
-| `md-to-docx` | Markdown parsing, typed options, OOXML output, image and chart handling, reference packages and patching |
-| `md-to-docx-cli` | `md-to-docx` executable, JSON options, batch conversion and watch mode |
-| `md-to-docx-napi` | Native Node addon and JavaScript wrapper |
+## Full checks
 
-The toolchain and dependency versions are pinned by `rust-toolchain.toml` and `Cargo.lock`.
-
-## Checks
+Rust, Node.js 20.9 or newer and Python 3 are required. The existing parity projector uses Python's ZIP reader.
 
 ```sh
+./scripts/validate.sh
+```
+
+The script installs the reference oracle, checks formatting and all-target Clippy with warnings denied, runs workspace tests, builds the Node addon and runs its integration tests and TypeScript consumer check. CI runs the same script and verifies benchmark output semantics.
+
+Individual checks:
+
+```sh
+npm ci --prefix crates/md-to-docx/tests/oracle
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --lib --bins
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+npm ci --prefix crates/md-to-docx-napi
+npm run build --prefix crates/md-to-docx-napi
+npm test --prefix crates/md-to-docx-napi
+npm run test:types --prefix crates/md-to-docx-napi
 ```
 
-The third command runs unit and binary tests. It does not run the integration parity tests. Run those separately once their prerequisites are available.
+## Reference oracle
+
+`crates/md-to-docx/tests/oracle/run.mjs` imports pinned `@mohtasham/md-to-docx` 4.0.1, `docx` 9.5.0 and JSZip 3.10.1 from its own npm installation. The oracle keeps the 4.0.1 application version while overriding Sharp and KaTeX to patched versions. The fixture is checked into `tests/oracle/fixtures/`. Cargo alone does not install npm dependencies; run the install command above or the validation script first.
+
+The fixture originates from the original MIT-licensed project. Tests inspect selected document properties, relationships, styles and media. They do not compare complete ZIP byte streams or render documents in Word.
+
+## Node checks
+
+Integration tests cover output types, reference and patch families, error context, cancellation, event-loop responsiveness, callback images/charts/Mermaid, concurrent asynchronous image resolvers and the JavaScript plugin/text-replacement compatibility path.
+
+The package's browser condition forwards to the original browser entry point. This does not turn the addon into WebAssembly.
+
+## Reproducible native benchmark
 
 ```sh
-cargo test -p md-to-docx --tests
+cargo run --locked --release -p md-to-docx --example benchmark
+cargo run --locked --release -p md-to-docx --example benchmark -- --fixtures /tmp/md-fixtures
+cargo run --locked --release -p md-to-docx --example benchmark -- --memory --case prose
 ```
 
-Some parity helpers use `python3` to unzip generated packages. Tests inspect selected XML structures and media; they do not compare entire ZIP byte streams or render documents in Word.
+The harness generates prose, ordered lists, plain and highlighted TypeScript, and a chart. It reports warmup, timed samples, medians, ranges, package sizes and uncompressed part sizes as JSON. It checks that highlighting creates colored runs and the chart has the requested dimensions. Fixture export includes the inputs and options so another implementation can use them.
 
-## TypeScript oracle
+These are new generated fixtures, explicitly marked as different from the historical inputs in [performance.md](performance.md). Do not compare their timings with the old tables or reuse old speedup ratios. Run both implementations against the exported fixtures on the same host.
 
-The slice-8 reference and patch tests run a live TypeScript oracle. In the original checkout layout, `slice8_oracle.mjs` imports `../../../../dist/index.js` relative to the test script and resolves `docx`, `jszip` and TypeScript reference fixtures outside this Rust workspace. A standalone checkout cannot satisfy that layout by running Cargo alone.
+Memory mode runs one conversion, retains the bytes and reads Linux `/proc/self/status` before unpacking. Other platforms report null for these Linux measurements. Run a fresh process per case. Keep native and Node measurements separate, and distinguish RSS at return from process high-water.
 
-Before claiming reference or patch parity, provide the original TypeScript build, its locked npm dependencies and its `tests/fixtures/reference-template.docx`, or update the tests to use an explicit oracle path. Run the suite and record the actual result. Missing oracle dependencies are a test setup failure, not evidence of matching conversion behavior.
+## Verification after the compatibility fixes
 
-The first review reported 114 workspace unit tests passing, parity slices 1 through 7 passing, and eight slice-9 tests passing. Slice 8 had 35 failures because its JavaScript dependencies were unavailable. Those are historical results, not the current branch's test status.
+The full validation script passed locally: 355 Rust tests (including 46 live TypeScript oracle tests), 19 Node integration tests, the TypeScript consumer check, formatting, and all-target Clippy with warnings denied. Both npm installations reported zero audit vulnerabilities.
 
-## Node verification
+A release benchmark smoke run passed all five output checks, including colored TypeScript and a 1200 × 800 chart. It used one measured iteration on macOS ARM, so it establishes harness operation rather than a new performance comparison. CI is configured to run these checks on Linux; its hosted result was not observed during this review.
 
-Build the release addon before exercising the wrapper. Verify `Blob`, `ArrayBuffer` and `Buffer` contracts independently, including reference and patch functions. Test a conversion large enough to check that timers continue running while native work is in progress. Function-valued JavaScript options need explicit bridge support; JSON serialization cannot transport callbacks.
-
-## Benchmark work still needed
-
-Commit fixture generation and benchmark entry points, with the exact options beside each fixture. Record toolchain, host, warmup count, timed samples, output size and memory collection method. For native and Node runs, report separate results.
-
-Check the output before comparing time. A highlighted fence must produce colored runs, lists must preserve start and nesting behavior, and charts must embed an image with the requested dimensions. Run memory measurements in fresh processes and distinguish RSS at return from process high-water.
-
-The [performance notes](performance.md) preserve the original measurements and their limits. Future compatibility changes need fresh numbers rather than carrying those results forward.
+No Word or LibreOffice visual comparison was performed. Browser tests checked export routing rather than DOM execution.

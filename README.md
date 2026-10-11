@@ -53,12 +53,17 @@ Use `--help` for flags and combinations. Binary stdout uses `-` as the output pa
 
 ## Node addon
 
-Build with `cargo build -p md-to-docx-napi --release`. The JavaScript wrapper discovers Cargo's native library in the default `target` directory. A custom `CARGO_TARGET_DIR` requires copying the addon beside the wrapper as `md-to-docx-napi.node`.
+Requires Node.js 20.9 or newer.
 
-The repository wrapper is an ES module. In an unpublished checkout without a `package.json` declaring `"type": "module"`, run it with Node's `--experimental-default-type=module` flag.
+Install the compatibility dependency, then build the native binary for the current OS and architecture:
 
 ```sh
-node --experimental-default-type=module --input-type=module <<'JS'
+npm ci --prefix crates/md-to-docx-napi
+npm run build --prefix crates/md-to-docx-napi
+```
+
+```sh
+node --input-type=module <<'JS'
 import { writeFile } from "node:fs/promises";
 import { convertMarkdownToBuffer } from "./crates/md-to-docx-napi/index.js";
 
@@ -67,7 +72,9 @@ await writeFile("report.docx", bytes);
 JS
 ```
 
-This addon needs Node and a native binary for the current platform. It does not provide a browser or WebAssembly build. Function-valued JavaScript options cannot pass through the JSON bridge. See the [compatibility notes](docs/compatibility.md) for return types and remaining differences.
+`convertMarkdownToDocx` returns a `Blob`; the ArrayBuffer and Buffer variants return their named types. Native conversions run off the event loop. JavaScript image, chart and Mermaid callbacks are supported by the native bridge.
+
+Existing JavaScript plugins and other APIs that require remark or `docx` objects use the pinned TypeScript compatibility path. The browser conditional export also uses the original browser implementation. These paths are not native Rust and are not covered by the native performance figures. See [compatibility](docs/compatibility.md) for dispatch rules and remaining differences.
 
 ## Performance and checks
 
