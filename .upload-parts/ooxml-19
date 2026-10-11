@@ -109,9 +109,9 @@
         let xml = part(&bytes, "word/document.xml");
         assert!(xml.contains("w:name=\"mdxref_figoverview_abc1234\""));
         assert!(xml.contains("w:name=\"mdxref_tblresults_def5678\""));
-        assert!(xml.contains("w:instr=\" SEQ MdToDocxFigure \\\\* ARABIC \""));
-        assert!(xml.contains("w:instr=\" SEQ MdToDocxTable \\\\* ARABIC \""));
-        assert!(xml.contains("w:instr=\" REF mdxref_figoverview_abc1234 \\\\h \""));
+        assert!(xml.contains("w:instr=\" SEQ MdToDocxFigure \\* ARABIC \""));
+        assert!(xml.contains("w:instr=\" SEQ MdToDocxTable \\* ARABIC \""));
+        assert!(xml.contains("w:instr=\" REF mdxref_figoverview_abc1234 \\h \""));
         assert!(xml.contains(">Figure 1<"));
         assert!(xml.contains(">Table <"));
         assert!(xml.contains(">1<"));
