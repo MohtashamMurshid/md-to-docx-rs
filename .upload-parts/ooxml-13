@@ -292,4 +292,3 @@ fn insert_before_close(
     *xml = text.into_bytes();
     Ok(())
 }
-}
