@@ -182,7 +182,7 @@ fn data_url_image_has_explicit_width_and_height() {
 // Jest: "embeds images inside list items"
 #[test]
 fn images_inside_list_items() {
-    let doc = convert(&format!("![list image]({ONE_PX_PNG})"));
+    let doc = convert(&format!("- ![list image]({ONE_PX_PNG})"));
     assert_eq!(doc.drawing_count, 1, "drawings\n{}", doc.render());
     assert!(!doc.media.is_empty());
     let paragraph = doc
@@ -463,7 +463,7 @@ fn data_url_images_embed_by_default() {
 #[test]
 fn alt_text_and_title_become_drawing_properties() {
     let doc = convert(&format!(
-        r#"![Revenue & growth]({ONE_PX_PNG} \"Chart <Q1>\")"#
+        r#"![Revenue & growth]({ONE_PX_PNG} "Chart <Q1>")"#
     ));
     let drawing = drawings(&doc)
         .first()
