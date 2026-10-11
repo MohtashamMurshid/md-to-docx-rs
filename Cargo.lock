@@ -788,7 +788,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "onig"
 version = "6.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc3caf698f9438986c11a880c90a6d04b9de27575afd28bbf45b154b6c709e2"
+checksum = "0cc3cbf698f9438986c11a880c90a6d04b9de27575afd28bbf45b154b6c709e2"
 dependencies = [
  "bitflags",
  "libc",
@@ -838,13 +838,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6b464fbc74e6c3a4f6f1a0dd695bd3232b9bc98bd9c8a3ffbb8b"
-dependencies = [
- "getrandom 0.2.17",
- "libc",
- "untrusted",
- "windows-sys",
-]
+checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plist"
@@ -1295,7 +1289,7 @@ dependencies = [
 name = "syntect"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "656b45c05d95e3a6c0e4e1c44474a0674821dfce14b79bc"
+checksum = "656b45c05d95a5704399aeef6bd0ddec7b2b3531b7c9e900abbf7c4d2190c925"
 dependencies = [
  "bincode",
  "flate2",
@@ -1738,7 +1732,7 @@ dependencies = [
 name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13084392c5e4bc371b903e2935a5eaeed24905a7511356b883835e18a78f6879"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 
 [[package]]
 name = "zerotrie"
