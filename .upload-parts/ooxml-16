@@ -1,0 +1,294 @@
+        write_abstract(&mut xml, sequence.saturating_add(1), false, *start)?;
+    }
+    write_num(&mut xml, 1, 1, 1)?;
+    for (sequence, start) in &ordered {
+        let id = sequence.saturating_add(1);
+        write_num(&mut xml, id, id, *start)?;
+    }
+    xml.end("w:numbering")?;
+    Ok(xml.finish())
+}
+
+fn write_abstract(
+    xml: &mut Xml,
+    id: u32,
+    bullet: bool,
+    start: u64,
+) -> Result<(), MarkdownConversionError> {
+    let id = id.to_string();
+    xml.start("w:abstractNum", &[("w:abstractNumId", &id)])?;
+    xml.empty("w:multiLevelType", &[("w:val", "hybridMultilevel")])?;
+    for level in 0..9 {
+        let ilvl = level.to_string();
+        let left = (720 * (level + 1)).to_string();
+        let hanging = if bullet { "360" } else { "260" };
+        let start_value = start.to_string();
+        let text = if bullet {
+            BULLETS[level].to_string()
+        } else {
+            format!("%{}.", level + 1)
+        };
+        xml.start("w:lvl", &[("w:ilvl", &ilvl)])?;
+        xml.empty("w:start", &[("w:val", &start_value)])?;
+        xml.empty(
+            "w:numFmt",
+            &[("w:val", if bullet { "bullet" } else { "decimal" })],
+        )?;
+        xml.empty("w:lvlText", &[("w:val", &text)])?;
+        xml.empty("w:lvlJc", &[("w:val", "left")])?;
+        xml.start("w:pPr", &[])?;
+        xml.empty("w:ind", &[("w:left", &left), ("w:hanging", hanging)])?;
+        xml.end("w:pPr")?;
+        xml.end("w:lvl")?;
+    }
+    xml.end("w:abstractNum")
+}
+
+fn write_num(
+    xml: &mut Xml,
+    num_id: u32,
+    abstract_id: u32,
+    start: u64,
+) -> Result<(), MarkdownConversionError> {
+    let num_id = num_id.to_string();
+    let abstract_id = abstract_id.to_string();
+    let start = start.to_string();
+    xml.start("w:num", &[("w:numId", &num_id)])?;
+    xml.empty("w:abstractNumId", &[("w:val", &abstract_id)])?;
+    xml.start("w:lvlOverride", &[("w:ilvl", "0")])?;
+    xml.empty("w:startOverride", &[("w:val", &start)])?;
+    xml.end("w:lvlOverride")?;
+    xml.end("w:num")
+}
+
+fn insert_footnote_images(children: &mut Vec<Block>, urls: &[String]) {
+    if urls.is_empty() || blocks_have_image(children) {
+        return;
+    }
+    let runs = urls
+        .iter()
+        .map(|url| Inline {
+            text: format!("{IMAGE_MARK}{url}"),
+            bold: false,
+            italic: false,
+            underline: false,
+            strike: false,
+            code: false,
+            link: None,
+            footnote: None,
+            math_omml: None,
+            cross_ref: None,
+        })
+        .collect::<Vec<_>>();
+    if let Some(Block::Paragraph(paragraph)) = children.last_mut() {
+        let blank = paragraph
+            .children
+            .iter()
+            .all(|run| run.text.is_empty() && run.footnote.is_none() && run.link.is_none());
+        if blank {
+            paragraph.children = runs;
+            return;
+        }
+    }
+    children.push(Block::Paragraph(Paragraph { children: runs }));
+}
+
+fn blocks_have_image(blocks: &[Block]) -> bool {
+    blocks.iter().any(block_has_image)
+}
+
+fn block_has_image(block: &Block) -> bool {
+    match block {
+        Block::Image(_) => true,
+        Block::Paragraph(paragraph) => paragraph.children.iter().any(|run| {
+            run.text.starts_with(IMAGE_MARK)
+                || run.text.starts_with("[Image could not be displayed")
+        }),
+        Block::Heading(heading) => heading.children.iter().any(|run| {
+            run.text.starts_with(IMAGE_MARK)
+                || run.text.starts_with("[Image could not be displayed")
+        }),
+        Block::Caption(caption) => caption.children.iter().any(|run| {
+            run.text.starts_with(IMAGE_MARK)
+                || run.text.starts_with("[Image could not be displayed")
+        }),
+        Block::List(list) => list
+            .children
+            .iter()
+            .any(|item| blocks_have_image(&item.children)),
+        Block::Blockquote(quote) => blocks_have_image(&quote.children),
+        Block::FootnoteDefinition { children, .. } => blocks_have_image(children),
+        Block::Table(table) => table
+            .header
+            .iter()
+            .chain(table.rows.iter().flatten())
+            .any(|cell| {
+                cell.children.iter().any(|run| {
+                    run.text.starts_with(IMAGE_MARK)
+                        || run.text.starts_with("[Image could not be displayed")
+                })
+            }),
+        Block::CodeBlock(_)
+        | Block::ThematicBreak
+        | Block::PageBreak
+        | Block::Comment(_)
+        | Block::DisplayMath { .. }
+        | Block::ChartImage { .. } => false,
+    }
+}
+
+/// Image URLs for each referenced footnote definition, in first-reference order.
+fn footnote_image_groups(markdown: &str) -> Vec<Vec<String>> {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_GFM);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_FOOTNOTES);
+
+    let mut order = Vec::new();
+    let mut defined = BTreeSet::new();
+    let mut images: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    let mut ignore = 0_u32;
+    for event in Parser::new_ext(markdown, options) {
+        if ignore > 0 {
+            match event {
+                MdEvent::Start(Tag::FootnoteDefinition(_)) => ignore = ignore.saturating_add(1),
+                MdEvent::End(TagEnd::FootnoteDefinition) => ignore = ignore.saturating_sub(1),
+                MdEvent::Start(_) => ignore = ignore.saturating_add(1),
+                MdEvent::End(_) => ignore = ignore.saturating_sub(1),
+                _ => {}
+            }
+            continue;
+        }
+        match event {
+            MdEvent::Start(Tag::FootnoteDefinition(label)) => {
+                let id = normalize_footnote_label(&label);
+                if defined.contains(&id) {
+                    ignore = 1;
+                    current = None;
+                } else {
+                    defined.insert(id.clone());
+                    images.entry(id.clone()).or_default();
+                    current = Some(id);
+                }
+            }
+            MdEvent::End(TagEnd::FootnoteDefinition) => current = None,
+            MdEvent::Start(Tag::Image { dest_url, .. }) => {
+                if let Some(id) = &current {
+                    images
+                        .entry(id.clone())
+                        .or_default()
+                        .push(dest_url.to_string());
+                }
+            }
+            MdEvent::FootnoteReference(label) => {
+                let id = normalize_footnote_label(&label);
+                if !order.contains(&id) {
+                    order.push(id);
+                }
+            }
+            _ => {}
+        }
+    }
+    order
+        .into_iter()
+        .filter(|id| defined.contains(id))
+        .map(|id| images.remove(&id).unwrap_or_default())
+        .collect()
+}
+
+fn normalize_footnote_label(label: &str) -> String {
+    label.trim().to_lowercase()
+}
+
+#[derive(Clone, Copy)]
+struct RasterKind {
+    extension: &'static str,
+    content_type: &'static str,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+const EMU_PER_PIXEL: u64 = 9525;
+const MAX_IMAGE_DIMENSION: u32 = 10_000;
+
+struct ImageLabel {
+    alt: String,
+    title: Option<String>,
+}
+
+fn emit_omml(xml: &mut Xml, omml: &str) -> Result<(), MarkdownConversionError> {
+    let omml = omml.trim();
+    if omml.is_empty() {
+        return Ok(());
+    }
+    if omml.contains("<m:oMath") || omml.contains("<m:oMathPara") {
+        xml.push_bytes(omml.as_bytes());
+        return Ok(());
+    }
+    let wrapped = format!(r#"<m:oMath xmlns:m="{MATH_NS}">{omml}</m:oMath>"#);
+    xml.push_bytes(wrapped.as_bytes());
+    Ok(())
+}
+
+fn image_placeholder(alt: &str) -> String {
+    if alt.is_empty() {
+        "[Image could not be displayed]".to_string()
+    } else {
+        format!("[Image could not be displayed: {alt}]")
+    }
+}
+
+fn extension_for_content_type(content_type: &str) -> &'static str {
+    match content_type {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpeg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        _ => "bin",
+    }
+}
+
+fn split_image_mark(rest: &str) -> (&str, &str, Option<&str>) {
+    let mut parts = rest.splitn(3, IMAGE_MARK);
+    let url = parts.next().unwrap_or("");
+    let alt = parts.next().unwrap_or("");
+    let title = parts.next().filter(|text| !text.is_empty());
+    (url, alt, title)
+}
+
+/// Inline image runs keep the raster bytes and drop the Markdown alt and title.
+/// Pair them with images in the source so `descr` and the drawing name survive.
+fn stamp_image_labels(blocks: &mut [Block], markdown: &str) {
+    let labels = image_labels(markdown);
+    let mut labels = labels.into_iter();
+    stamp_blocks(blocks, &mut labels);
+}
+
+fn image_labels(markdown: &str) -> Vec<ImageLabel> {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_GFM);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_FOOTNOTES);
+    let mut labels = Vec::new();
+    let mut alt = String::new();
+    let mut title: Option<String> = None;
+    let mut depth = 0_u32;
+    for event in Parser::new_ext(markdown, options) {
+        if depth > 0 {
+            match event {
+                MdEvent::Start(_) => depth = depth.saturating_add(1),
+                MdEvent::End(_) => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        labels.push(ImageLabel {
+                            alt: std::mem::take(&mut alt),
+                            title: title.take().filter(|text| !text.is_empty()),
+                        });
+                    }
+                }
