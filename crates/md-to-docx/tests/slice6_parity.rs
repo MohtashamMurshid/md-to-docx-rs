@@ -18,12 +18,12 @@ use md_to_docx::ConvertOptions;
 
 const EMU_PER_PX: u64 = 9525;
 
-const BAR_CHART: &str = r#"{"type":"bar","data":{"labels":["Q1","Q2","Q3"],"datasets":[{"label":"Revenue","data":[12,18,9]}]},"width":160,"height":90,"alt":"Revenue chart"}#";
-const LINE_CHART: &str = r#"{"type":"line","data":{"labels":["A","B","C"],"datasets":[{"data":[1,3,2]}]},"width":321,"height":123}#";
+const BAR_CHART: &str = r#"{"type":"bar","data":{"labels":["Q1","Q2","Q3"],"datasets":[{"label":"Revenue","data":[12,18,9]}]},"width":160,"height":90,"alt":"Revenue chart"}"#;
+const LINE_CHART: &str = r#"{"type":"line","data":{"labels":["A","B","C"],"datasets":[{"data":[1,3,2]}]},"width":321,"height":123}"#;
 const PIE_CHART: &str = r##"{"type":"pie","data":{"labels":["Only"],"datasets":[{"data":[1],"backgroundColor":["#E15759"]}]},"width":96,"height":96}"##;
 const DOUGHNUT_CHART: &str = r##"{"type":"doughnut","data":{"labels":["Only"],"datasets":[{"data":[1],"backgroundColor":["#E15759"]}]},"width":96,"height":96}"##;
 const DOUGHNUT_FULL: &str = r##"{"type":"doughnut","data":{"labels":["All","None"],"datasets":[{"data":[5,0],"backgroundColor":["#E15759","#4E79A7"]}]},"width":96,"height":96}"##;
-const DEFAULT_CHART: &str = r#"{"type":"bar","data":{"labels":["Q1"],"datasets":[{"data":[1]}]}}#";
+const DEFAULT_CHART: &str = r#"{"type":"bar","data":{"labels":["Q1"],"datasets":[{"data":[1]}]}}"#;
 
 const ONE_PX_PAYLOAD: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAGgwJ/vk9yBgAAAABJRU5ErkJggg==";
