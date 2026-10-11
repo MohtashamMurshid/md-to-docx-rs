@@ -992,7 +992,7 @@ mod tests {
         assert!(error.message().starts_with("expected chart JSON ("));
         let error = render_chart("[]", 640, 360).unwrap_err();
         assert_eq!(error.message(), "chart definition must be a JSON object");
-        let error = render_chart(r#"{"type":"scatter"}"# , 640, 360).unwrap_err();
+        let error = render_chart(r#"{"type":"scatter"}\u0022\u0023\u002c 640, 360).unwrap_err();
         assert_eq!(
             error.message(),
             "chart type must be one of bar, line, pie, doughnut"
