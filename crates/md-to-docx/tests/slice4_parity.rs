@@ -132,7 +132,7 @@ fn only_table(doc: &Document) -> &Table {
 }
 
 #[track_caller]
-fn cell<'a>(table: &'a Table, row: usize, column: usize) -> &'a Paragraph {
+fn cell(table: &Table, row: usize, column: usize) -> &Paragraph {
     table
         .rows
         .get(row)

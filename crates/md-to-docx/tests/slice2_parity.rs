@@ -325,11 +325,11 @@ fn comment_full_text() {
     let paras = paragraphs(&doc);
     assert_eq!(paras[0].heading.as_deref(), Some("Heading1"));
     assert_eq!(paras[0].bookmarks, ["_Toc_Title_1"]);
-    let comment = run_named(&paras[1], "Comment: hello world this is a note");
+    let comment = run_named(paras[1], "Comment: hello world this is a note");
     assert!(comment.italic);
     assert!(!comment.bold);
     assert_eq!(comment.color.as_deref(), Some("666666"));
-    assert!(!run_named(&paras[2], "Body.").italic);
+    assert!(!run_named(paras[2], "Body.").italic);
 }
 
 // Jest: "renders multi-word comments inside blockquotes"
@@ -338,10 +338,10 @@ fn comment_inside_blockquote() {
     let doc = convert("> quoted\n>\n> <!-- COMMENT: reviewer feedback here -->");
     assert_texts(&doc, &["quoted", "Comment: reviewer feedback here"]);
     let paras = paragraphs(&doc);
-    let quoted = run_named(&paras[0], "quoted");
+    let quoted = run_named(paras[0], "quoted");
     assert!(quoted.italic);
     assert_eq!(quoted.color.as_deref(), Some("000000"));
-    let comment = run_named(&paras[1], "Comment: reviewer feedback here");
+    let comment = run_named(paras[1], "Comment: reviewer feedback here");
     assert!(comment.italic);
     assert_eq!(comment.color.as_deref(), Some("666666"));
 }

@@ -191,10 +191,10 @@ fn priority_then_registration_order_when_conflicts_are_allowed() {
     let mut high = static_fence("acme.high", "notice", Some(10), "high");
     let low_order = Arc::clone(&order);
     let high_order = Arc::clone(&order);
-    low.transform_ast = Some(PluginAstTransform::new(move || {
+    low.transform_ast = Some(PluginAstTransform::new(move |_| {
         low_order.lock().expect("order").push("low");
     }));
-    high.transform_ast = Some(PluginAstTransform::new(move || {
+    high.transform_ast = Some(PluginAstTransform::new(move |_| {
         high_order.lock().expect("order").push("high");
     }));
     let doc = convert(

@@ -22,11 +22,13 @@ use crate::locale_sort::js_locale_compare;
 
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
+type StdoutWriter = Box<dyn FnMut(&[u8]) -> Result<(), String>>;
+
 pub struct CliHooks {
     pub log: Box<dyn FnMut(&str)>,
     pub error: Box<dyn FnMut(&str)>,
     pub read_stdin: Option<Box<dyn FnMut() -> Result<String, String>>>,
-    pub write_stdout: Option<Box<dyn FnMut(&[u8]) -> Result<(), String>>>,
+    pub write_stdout: Option<StdoutWriter>,
 }
 
 impl CliHooks {
@@ -101,8 +103,14 @@ fn convert_all(
         if abort.load(Ordering::SeqCst) {
             return Ok(());
         }
-        match convert_one(parsed, loaded.as_ref(), reference.as_deref(), input, hooks, abort)
-        {
+        match convert_one(
+            parsed,
+            loaded.as_ref(),
+            reference.as_deref(),
+            input,
+            hooks,
+            abort,
+        ) {
             Ok(bytes) => {
                 if binary_stdout {
                     write_binary_stdout(hooks, &bytes)?;
@@ -139,18 +147,22 @@ fn convert_one(
     hooks: &mut CliHooks,
     abort: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
-    let convert_options = loaded
+    let mut convert_options = loaded
         .map(|loaded| loaded.convert.clone())
         .unwrap_or_default();
-    let patch_options = loaded
+    let mut patch_options = loaded
         .map(|loaded| loaded.patch.clone())
         .unwrap_or_default();
-    // Resolved the same way as Node. The library bytes API does not accept
-    // image options yet, so this directory is not applied to the conversion.
-    let _base_directory = image_base_directory(parsed, loaded, input);
+    let base_directory = image_base_directory(parsed, loaded, input);
+    let images = convert_options
+        .image_handling
+        .get_or_insert_with(Default::default);
+    images.base_directory = Some(base_directory);
+    patch_options.convert = convert_options.clone();
     if let Some(patches) = &parsed.patches {
         let template = fs::read(input).map_err(|error| io_message(Path::new(input), &error))?;
-        let text = fs::read_to_string(patches).map_err(|error| io_message(Path::new(patches), &error))?;
+        let text =
+            fs::read_to_string(patches).map_err(|error| io_message(Path::new(patches), &error))?;
         let patches = load_patches_json(&text)?;
         return patch_markdown(&template, &patches, &patch_options).map_err(error_message);
     }
@@ -161,6 +173,7 @@ fn convert_one(
     };
     if let Some(reference) = reference {
         let options = ReferenceDocxGenerationOptions {
+            convert: convert_options,
             reference: loaded.and_then(|loaded| loaded.reference.clone()),
             aborted: abort.load(Ordering::SeqCst),
         };
@@ -170,11 +183,14 @@ fn convert_one(
     convert_with_options(&markdown, &convert_options).map_err(error_message)
 }
 
-/// Directory Node would pass as `imageHandling.baseDirectory`.
+/// Resolve the image root relative to the input file.
 ///
-/// The library conversion entry points do not take image options, so the
-/// directory is recorded for watch roots and for a later library hook.
-fn image_base_directory(parsed: &ParsedArgs, loaded: Option<&LoadedOptions>, input: &str) -> PathBuf {
+/// An explicit CLI path takes precedence over JSON and the input directory.
+fn image_base_directory(
+    parsed: &ParsedArgs,
+    loaded: Option<&LoadedOptions>,
+    input: &str,
+) -> PathBuf {
     if let Some(base) = &parsed.base_directory {
         return resolve_path(base);
     }
@@ -299,9 +315,7 @@ fn write_binary_stdout(hooks: &mut CliHooks, data: &[u8]) -> Result<(), String> 
         return write(data);
     }
     let mut stdout = std::io::stdout().lock();
-    stdout
-        .write_all(data)
-        .map_err(|error| error.to_string())?;
+    stdout.write_all(data).map_err(|error| error.to_string())?;
     stdout.flush().map_err(|error| error.to_string())
 }
 
@@ -315,17 +329,14 @@ fn report(hooks: &mut CliHooks, binary_stdout: bool, message: &str) {
 
 fn watch(parsed: &ParsedArgs, hooks: &mut CliHooks, abort: &AtomicBool) -> Result<(), String> {
     let (sender, receiver) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
-        let _ = sender.send(event);
-    })
-    .map_err(|error| error.to_string())?;
+    let mut watcher =
+        notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
+            let _ = sender.send(event);
+        })
+        .map_err(|error| error.to_string())?;
     let mut watched = std::collections::BTreeSet::new();
     sync_watch_roots(&mut watcher, &mut watched, parsed)?;
-    report(
-        hooks,
-        parsed.output == "-",
-        "Watching for changes...",
-    );
+    report(hooks, parsed.output == "-", "Watching for changes...");
     let mut deadline: Option<Instant> = None;
     while !abort.load(Ordering::SeqCst) {
         let timeout = match deadline {
@@ -403,10 +414,11 @@ fn watch_roots(parsed: &ParsedArgs) -> std::collections::BTreeSet<PathBuf> {
     } else {
         roots.insert(parent_directory(&resolve_path(&parsed.input)));
     }
-    for file in [&parsed.options, &parsed.reference, &parsed.patches] {
-        if let Some(file) = file {
-            roots.insert(parent_directory(&resolve_path(file)));
-        }
+    for file in [&parsed.options, &parsed.reference, &parsed.patches]
+        .into_iter()
+        .flatten()
+    {
+        roots.insert(parent_directory(&resolve_path(file)));
     }
     if let Some(base) = &parsed.base_directory {
         roots.insert(resolve_path(base));
@@ -493,7 +505,10 @@ mod tests {
         let mut hooks = CliHooks {
             log: Box::new(move |message| logs_hook.lock().expect("logs").push(message.to_string())),
             error: Box::new(move |message| {
-                errors_hook.lock().expect("errors").push(message.to_string())
+                errors_hook
+                    .lock()
+                    .expect("errors")
+                    .push(message.to_string())
             }),
             read_stdin: stdin.map(|text| {
                 Box::new(move || Ok(text.clone())) as Box<dyn FnMut() -> Result<String, String>>
@@ -527,6 +542,59 @@ mod tests {
     }
 
     #[test]
+    fn local_images_resolve_from_input_directory_and_explicit_base_dir() {
+        use std::io::{Cursor, Read};
+
+        // Valid 1x1 red and blue PNGs distinguish the default root from the override.
+        const RED_PNG: &[u8] = &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
+            96, 130,
+        ];
+        const BLUE_PNG: &[u8] = &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 96, 96,
+            248, 255, 31, 0, 3, 2, 1, 255, 230, 119, 11, 174, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
+            96, 130,
+        ];
+        let dir = temp_dir();
+        let input_dir = dir.join("input");
+        let override_dir = dir.join("override");
+        fs::create_dir_all(&input_dir).unwrap();
+        fs::create_dir_all(&override_dir).unwrap();
+        let input = input_dir.join("report.md");
+        fs::write(&input, "![Chart](chart.png)").unwrap();
+        fs::write(input_dir.join("chart.png"), RED_PNG).unwrap();
+        fs::write(override_dir.join("chart.png"), BLUE_PNG).unwrap();
+        for (base, expected) in [(None, RED_PNG), (Some(&override_dir), BLUE_PNG)] {
+            let output = dir.join("report.docx");
+            let mut args = vec![
+                input.to_string_lossy().into_owned(),
+                output.to_string_lossy().into_owned(),
+            ];
+            if let Some(base) = base {
+                args.extend([
+                    "--base-dir".to_string(),
+                    base.to_string_lossy().into_owned(),
+                ]);
+            }
+            let captured = run(&args, None);
+            assert_eq!(captured.code, 0, "{:?}", captured.errors);
+            let bytes = fs::read(&output).unwrap();
+            let mut package = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+            let mut actual = Vec::new();
+            package
+                .by_name("word/media/image1.png")
+                .unwrap()
+                .read_to_end(&mut actual)
+                .unwrap();
+            assert_eq!(actual, expected, "wrong image root for {base:?}");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn help_goes_to_stdout_and_exits_0() {
         for flag in ["--help", "-h"] {
             let captured = run(&[flag.to_string()], None);
@@ -542,8 +610,14 @@ mod tests {
     fn failure_modes_match_jest_cli_tests() {
         let cases: &[(&[&str], &str)] = &[
             (&[], "Usage:"),
-            (&["a.md", "b.docx", "--verbose"], "Unknown argument: --verbose"),
-            (&["a.md", "b.docx", "--options"], "Missing value for --options"),
+            (
+                &["a.md", "b.docx", "--verbose"],
+                "Unknown argument: --verbose",
+            ),
+            (
+                &["a.md", "b.docx", "--options"],
+                "Missing value for --options",
+            ),
             (
                 &["a.md", "b.docx", "extra.md"],
                 "Expected exactly 2 positional arguments",
@@ -592,7 +666,10 @@ mod tests {
         fs::write(&input, "# Test\n\nContent.").unwrap();
         for (body, expected) in [
             ("not valid json", "Invalid JSON"),
-            (r#"["not", "an", "object"]"#, "Options JSON must be an object"),
+            (
+                r#"["not", "an", "object"]"#,
+                "Options JSON must be an object",
+            ),
         ] {
             let options = dir.join("options.json");
             let output = dir.join("output.docx");
@@ -715,7 +792,10 @@ mod tests {
 
     #[test]
     fn binary_stdout_keeps_status_off_stdout() {
-        let captured = run(&["-".to_string(), "-".to_string()], Some("# Piped".to_string()));
+        let captured = run(
+            &["-".to_string(), "-".to_string()],
+            Some("# Piped".to_string()),
+        );
         assert_eq!(captured.code, 0, "{:?}", captured.errors);
         assert!(captured.logs.is_empty(), "{:?}", captured.logs);
         assert!(captured.stdout.starts_with(b"PK"));
@@ -731,7 +811,7 @@ mod tests {
         fs::write(input.join("a.md"), "# Aye").unwrap();
         fs::write(input.join("nested").join("c.md"), "# Sea").unwrap();
         fs::write(input.join("notes.txt"), "skip").unwrap();
-        fs::write(input.join("long.md"), &"x".repeat(20)).unwrap();
+        fs::write(input.join("long.md"), "x".repeat(20)).unwrap();
         let options = dir.join("limits.json");
         fs::write(&options, r#"{"maxInputLength":5}"#).unwrap();
         let captured = run(

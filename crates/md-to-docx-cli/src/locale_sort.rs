@@ -79,13 +79,28 @@ mod tests {
     #[test]
     fn matches_node_en_us_locale_compare() {
         let mut names = vec![
-            "two.md", "nested", "One.md", "a.md", "B.md", "file10.md", "file2.md", "é.md", "e.md",
+            "two.md",
+            "nested",
+            "One.md",
+            "a.md",
+            "B.md",
+            "file10.md",
+            "file2.md",
+            "é.md",
+            "e.md",
         ];
         names.sort_by(|left, right| js_locale_compare(left, right));
         assert_eq!(
             names,
             vec![
-                "a.md", "B.md", "e.md", "é.md", "file10.md", "file2.md", "nested", "One.md",
+                "a.md",
+                "B.md",
+                "e.md",
+                "é.md",
+                "file10.md",
+                "file2.md",
+                "nested",
+                "One.md",
                 "two.md",
             ]
         );

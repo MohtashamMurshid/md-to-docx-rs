@@ -17,3 +17,6 @@ notify = "=6.1.1"
 serde_json = "=1.0.140"
 signal-hook = "=0.3.17"
 unicode-normalization = "=0.1.24"
+
+[dev-dependencies]
+zip = "=9.0.1"

@@ -54,8 +54,20 @@ pub fn prepare(
     let resolved = resolve_sections(markdown, options);
     reject_header_footer_length(&resolved, options.max_input_length)?;
     let mut cursor = ParseCursor::new();
+    if let Some(images) = &options.image_handling {
+        cursor.images = images.clone();
+    }
     cursor.missing_alt = missing_alt_policy(options);
-    cursor.images.missing_image_alt_text = image_alt_policy(cursor.missing_alt);
+    if options
+        .accessibility
+        .as_ref()
+        .and_then(|access| access.missing_image_alt_text)
+        .is_some()
+    {
+        cursor.images.missing_image_alt_text = image_alt_policy(cursor.missing_alt);
+    } else if cursor.images.missing_image_alt_text == crate::images::MissingImageAltText::Throw {
+        cursor.missing_alt = MissingImageAltText::Throw;
+    }
     cursor.math_enabled = math_enabled(options);
     cursor.math_throw = math_throws(options);
     cursor.chart = chart_pass(options);
@@ -71,7 +83,7 @@ pub fn prepare(
     }
     if let Some(runtime) = &runtime {
         for document in &mut bodies {
-            runtime.transform();
+            runtime.transform(document);
             document.children =
                 rewrite_plugin_blocks(std::mem::take(&mut document.children), runtime)?;
         }
@@ -145,6 +157,34 @@ fn rewrite_plugin_blocks(
     let mut rewritten = Vec::with_capacity(blocks.len());
     for block in blocks {
         match block {
+            Block::Custom { node_type, value } => {
+                let input = crate::options::PluginBlockNodeInput { node_type, value };
+                let fallback = || {
+                    vec![Block::Paragraph(Paragraph {
+                        children: vec![plugin_run(PluginInline {
+                            text: input.value.clone(),
+                            ..Default::default()
+                        })],
+                    })]
+                };
+                let Some(binding) = runtime.node(&input.node_type) else {
+                    rewritten.extend(fallback());
+                    continue;
+                };
+                match binding.render(&input) {
+                    Ok(blocks) => rewritten.extend(lower_plugin_blocks(blocks)),
+                    Err(_) if binding.failure_mode == PluginFailureMode::Fallback => {
+                        rewritten.extend(fallback())
+                    }
+                    Err(_) if binding.failure_mode == PluginFailureMode::Skip => {}
+                    Err(error) => {
+                        return Err(MarkdownConversionError::new(format!(
+                            "Plugin \"{}\" block-node renderer failed: {}",
+                            binding.plugin_name, error
+                        )))
+                    }
+                }
+            }
             Block::CodeBlock(code) => {
                 rewritten.extend(render_plugin_fence(code, runtime)?);
             }
@@ -1283,24 +1323,39 @@ impl Walker {
         value: &str,
         chart: &ChartPass,
     ) -> Result<(), MarkdownConversionError> {
-        // These are the sizes `render_chart` uses when the JSON omits that
-        // axis. A JSON width or height replaces the argument. A value above
-        // 2000 is already an error from the rasterizer.
-        let rendered = match &chart.renderer {
-            Some(renderer) => renderer.render(value, chart.width, chart.height),
-            None => crate::charts::render_chart(value, chart.width, chart.height),
-        };
-        match rendered {
-            Ok(bytes) => {
-                let (width_px, height_px) =
-                    png_pixel_size(&bytes).unwrap_or((chart.width, chart.height));
-                self.add_block(Block::ChartImage {
-                    bytes,
-                    width_px,
-                    height_px,
-                    alt: chart_drawing_alt(value),
-                })
+        let size = crate::charts::resolved_size(
+            value,
+            chart.width,
+            chart.height,
+            chart.max_width,
+            chart.max_height,
+        );
+        let rendered = size.and_then(|(width, height)| {
+            let bytes = match &chart.renderer {
+                Some(renderer) => renderer.render(value, width, height)?,
+                None if chart.max_width == 2000 && chart.max_height == 2000 => {
+                    crate::charts::render_chart(value, width, height)?
+                }
+                None => crate::charts::render_chart_with_limits(
+                    value,
+                    width,
+                    height,
+                    chart.max_width,
+                    chart.max_height,
+                )?,
+            };
+            if png_pixel_size(&bytes).is_none() {
+                return Err(parse_error("Chart renderer must return PNG bytes"));
             }
+            Ok((bytes, width, height))
+        });
+        match rendered {
+            Ok((bytes, width_px, height_px)) => self.add_block(Block::ChartImage {
+                bytes,
+                width_px,
+                height_px,
+                alt: chart_drawing_alt(value),
+            }),
             Err(err) if chart.throw_invalid || chart_error_stops_conversion(&err) => {
                 Err(invalid_chart(err))
             }
@@ -1341,11 +1396,14 @@ impl Walker {
         &mut self,
         image: crate::options::MermaidRenderOutput,
     ) -> Result<(), MarkdownConversionError> {
-        let alt = image.alt;
+        let mut alt = image.alt;
         if self.missing_alt == MissingImageAltText::Throw && alt.trim().is_empty() {
             return Err(MarkdownConversionError::new(
                 "Missing image alt text in Mermaid renderer result; strict accessibility mode requires a non-empty description",
             ));
+        }
+        if alt.trim().is_empty() {
+            alt = "Mermaid diagram".into();
         }
         let content_type = if image.content_type.is_empty() {
             "image/png".to_string()
@@ -1985,6 +2043,8 @@ enum MathPiece {
 struct ChartPass {
     width: u32,
     height: u32,
+    max_width: u32,
+    max_height: u32,
     throw_invalid: bool,
     renderer: Option<ChartRenderer>,
 }
@@ -1994,6 +2054,8 @@ impl ChartPass {
         Self {
             width: positive_or(chart.width, DEFAULT_CHART_WIDTH),
             height: positive_or(chart.height, DEFAULT_CHART_HEIGHT),
+            max_width: positive_or(chart.max_width, 2000),
+            max_height: positive_or(chart.max_height, 2000),
             throw_invalid: matches!(
                 chart.invalid_definition_behavior,
                 Some(ChartInvalidBehavior::Throw)
@@ -2313,6 +2375,7 @@ fn collect_block_headings(block: &Block, headings: &mut Vec<TocHeading>) {
         Block::Paragraph(_)
         | Block::CodeBlock(_)
         | Block::Table(_)
+        | Block::Custom { .. }
         | Block::ThematicBreak
         | Block::PageBreak
         | Block::Comment(_)
@@ -2342,6 +2405,7 @@ fn block_has_footnote(block: &Block) -> bool {
         Block::Paragraph(paragraph) => inlines_have_footnote(&paragraph.children),
         Block::Heading(heading) => inlines_have_footnote(&heading.children),
         Block::CodeBlock(_)
+        | Block::Custom { .. }
         | Block::ThematicBreak
         | Block::PageBreak
         | Block::Comment(_)
@@ -2637,7 +2701,7 @@ fn bind_documents(
 }
 
 fn bind_captions(
-    blocks: &mut Vec<Block>,
+    blocks: &mut [Block],
     book: &mut BTreeMap<String, CrossRef>,
     pass: &CaptionPass,
 ) -> Result<(), MarkdownConversionError> {
@@ -2933,6 +2997,7 @@ fn resolve_block(
         }
         Block::FootnoteDefinition { children, .. } => resolve_blocks(children, book, throw),
         Block::CodeBlock(_)
+        | Block::Custom { .. }
         | Block::ThematicBreak
         | Block::PageBreak
         | Block::Comment(_)
@@ -3379,10 +3444,11 @@ fn count_header_footer(
     mut count: u64,
     max: u64,
 ) -> Result<u64, MarkdownConversionError> {
-    for body in [&group.default, &group.first, &group.even] {
-        if let Some(body) = body {
-            count = count_elements(&body.blocks, count, max)?;
-        }
+    for body in [&group.default, &group.first, &group.even]
+        .into_iter()
+        .flatten()
+    {
+        count = count_elements(&body.blocks, count, max)?;
     }
     Ok(count)
 }
@@ -3419,6 +3485,7 @@ fn count_elements(
                 }
             }
             Block::CodeBlock(_)
+            | Block::Custom { .. }
             | Block::ThematicBreak
             | Block::PageBreak
             | Block::Comment(_)
@@ -3455,9 +3522,6 @@ fn count_inlines(
 }
 
 fn bump(count: &mut u64, max: u64) -> Result<(), MarkdownConversionError> {
-    if *count % 1000 == 0 {
-        // `ConvertOptions` has no abort signal. The check stays on this beat.
-    }
     *count += 1;
     if *count > max {
         return Err(MarkdownConversionError::new(
@@ -4129,6 +4193,7 @@ mod tests {
             Block::Caption(caption) => push_footnote_ids(&caption.children, ids),
             Block::FootnoteDefinition { .. }
             | Block::CodeBlock(_)
+            | Block::Custom { .. }
             | Block::ThematicBreak
             | Block::PageBreak
             | Block::Comment(_)

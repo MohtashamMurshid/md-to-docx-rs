@@ -11,11 +11,10 @@ import {
   convertMarkdownToBuffer,
   convertMarkdownWithReferenceDocxToBuffer,
   patchMarkdownInDocxToBuffer,
-} from "../../../../dist/index.js";
+} from "@mohtasham/md-to-docx";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repo = path.resolve(here, "../../../..");
-const fixturePath = path.join(repo, "tests", "fixtures", "reference-template.docx");
+const fixturePath = path.join(here, "fixtures", "reference-template.docx");
 
 const THEME_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Corporate Theme">

@@ -1,10 +1,9 @@
-import { Buffer } from "node:buffer";
-import { createRequire } from "node:module";
+import { Blob, Buffer } from "node:buffer";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const require = createRequire(import.meta.url);
+
 const here = dirname(fileURLToPath(import.meta.url));
 
 function loadNative() {
@@ -47,12 +46,165 @@ function native() {
   return nativeBinding;
 }
 
+
+
+let compatibilityModule;
+function compatibility() {
+  compatibilityModule ??= import("@mohtasham/md-to-docx");
+  return compatibilityModule;
+}
+
+function needsCompatibility(value, path = "options") {
+  if (value instanceof RegExp) return true;
+  if (typeof value === "function") {
+    return !["options.imageHandling.resolve", "options.chartRendering.renderer", "options.mermaidRendering.render"].includes(path);
+  }
+  if (!value || typeof value !== "object" || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return false;
+  if (path === "options" && ["plugins", "pluginOptions", "onWarning"].some(key => Object.hasOwn(value, key))) return true;
+  return Object.keys(value).some(key => needsCompatibility(value[key], `${path}.${key}`));
+}
+
+function chartInput(input, options, signal) {
+  const definition = input.definition;
+  if (!definition || typeof definition !== "object" || Array.isArray(definition)) throw new Error("chart definition must be a JSON object");
+  if (!["bar", "line", "pie", "doughnut"].includes(definition.type)) throw new Error("chart type must be one of bar, line, pie, doughnut");
+  if (!Array.isArray(definition.data?.datasets) || definition.data.datasets.length === 0) throw new Error("chart data.datasets must contain at least one dataset");
+  definition.data.datasets.forEach((dataset, index) => {
+    if (!Array.isArray(dataset?.data)) throw new Error(`chart data.datasets[${index}].data must be an array`);
+    if (dataset.data.length === 0 || dataset.data.some(value => typeof value !== "number" || !Number.isFinite(value))) throw new Error(`chart data.datasets[${index}].data must contain finite numbers`);
+  });
+  if (definition.data.labels !== undefined && (!Array.isArray(definition.data.labels) || definition.data.labels.some(label => typeof label !== "string"))) throw new Error("chart data.labels must be an array of strings");
+  const result = { definition, signal };
+  for (const axis of ["width", "height"]) {
+    const value = definition[axis] ?? input[axis];
+    const maximum = options?.[axis === "width" ? "maxWidth" : "maxHeight"] ?? 2000;
+    if (!Number.isInteger(value) || value <= 0) throw new Error(`chart ${axis} must be a positive integer`);
+    if (value > maximum) throw new Error(`chart ${axis} exceeds maximum ${maximum}`);
+    result[axis] = value;
+  }
+  return result;
+}
+
+function imageContentType(bytes) {
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
+  if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "image/jpeg";
+  if (/^GIF8[79]a$/.test(bytes.subarray(0, 6).toString("ascii"))) return "image/gif";
+  return undefined;
+}
+
+async function invoke(name, markdown, reference, patches, options, type) {
+  if (needsCompatibility(options) || needsCompatibility(patches, "patches")
+      || typeof reference === "string" || reference instanceof Promise || Array.isArray(reference)
+      || (patches && Object.values(patches).some(patch => patch && typeof patch === "object" && Object.hasOwn(patch, "style")))) {
+    const api = await compatibility();
+    const args = patches !== undefined ? [reference, patches, options]
+      : reference !== undefined ? [markdown, reference, options] : [markdown, options];
+    // The upstream result already has the public type. Normalize only errors.
+    try {
+      return await api[name](...args);
+    } catch (error) {
+      if (error?.name === "MarkdownConversionError") {
+        throw new MarkdownConversionError(error.message, error.context, { cause: error });
+      }
+      throw error;
+    }
+  }
+  const callbacks = {
+    image: typeof options?.imageHandling?.resolve === "function",
+    chart: typeof options?.chartRendering?.renderer === "function",
+    mermaid: typeof options?.mermaidRendering?.render === "function",
+  };
+  const referenceBytes = reference === undefined ? undefined : await toBytes(reference);
+  if (Object.values(callbacks).some(Boolean)) {
+    const plain = { ...options };
+    for (const [group, key] of [["imageHandling", "resolve"], ["chartRendering", "renderer"], ["mermaidRendering", "render"]]) {
+      if (plain[group]) {
+        plain[group] = { ...plain[group] };
+        delete plain[group][key];
+      }
+    }
+    const dispatch = async request => {
+      const input = JSON.parse(request);
+      const signal = options?.signal;
+      if (signal?.aborted) throw abortedError(signal);
+      let result;
+      if (input.kind === "image") result = await options.imageHandling.resolve(input.source, { maxBytes: input.maxBytes, signal });
+      if (input.kind === "chart") result = await options.chartRendering.renderer(chartInput(input, options.chartRendering, signal));
+      if (input.kind === "mermaid") result = await options.mermaidRendering.render({ code: input.code, meta: input.meta ?? undefined, signal });
+      if (result == null) return "null";
+      if (typeof result === "string") {
+        if (input.kind !== "chart" || !/^data:image\/png;base64,/i.test(result)) throw new Error("chart renderer must return a PNG data URL or PNG bytes");
+        return JSON.stringify({ source: result });
+      }
+      if (input.kind === "chart") return JSON.stringify({ data: Array.from(await toBytes(result)) });
+      const bytes = await toBytes(result.data);
+      return JSON.stringify({ ...result, contentType: result.contentType ?? imageContentType(bytes), data: Array.from(bytes) });
+    };
+    return output(native().convertWithCallbacks(markdown ?? "", referenceBytes, patches === undefined ? undefined : JSON.stringify(patches), encodeOptions(plain), JSON.stringify(callbacks), dispatch), type, options);
+  }
+  const args = patches !== undefined ? [referenceBytes, JSON.stringify(patches), encodeOptions(options)]
+    : referenceBytes !== undefined ? [markdown, referenceBytes, encodeOptions(options)] : [markdown, encodeOptions(options)];
+  return output(native()[name](...args), type, options);
+}
+
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+export class MarkdownConversionError extends Error {
+  constructor(message, context, options) {
+    super(message, options);
+    this.name = "MarkdownConversionError";
+    this.context = context;
+  }
+}
+
+function abortedError(signal) {
+  return new MarkdownConversionError("Markdown conversion was aborted", { code: "ABORTED", reason: signal?.reason });
+}
+
+async function output(promise, type, options) {
+  let bytes;
+  let onAbort;
+  const signal = options?.signal;
+  try {
+    if (signal && typeof signal.addEventListener === "function") {
+      bytes = await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          onAbort = () => reject(abortedError(signal));
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        }),
+      ]);
+    } else {
+      bytes = await promise;
+    }
+  } catch (error) {
+    const prefix = "MD_TO_DOCX_ERROR:";
+    if (typeof error?.message === "string" && error.message.startsWith(prefix)) {
+      const details = JSON.parse(error.message.slice(prefix.length));
+      throw new MarkdownConversionError(details.message, details.context, { cause: error });
+    }
+    if (error?.name === "MarkdownConversionError" && !(error instanceof MarkdownConversionError)) {
+      throw new MarkdownConversionError(error.message, error.context, { cause: error });
+    }
+    throw error;
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+  if (type === "blob") return new Blob([bytes], { type: DOCX_MIME });
+  if (type === "arrayBuffer") {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+  return bytes;
+}
+
 function encodeOptions(options) {
   if (options === undefined) {
     return undefined;
   }
+  if (options?.signal?.aborted) throw abortedError(options.signal);
   rejectFunctions(options, "options");
-  return JSON.stringify(options);
+  return JSON.stringify(options.signal ? { ...options, signal: { aborted: options.signal.aborted === true } } : options);
 }
 
 function rejectFunctions(value, path) {
@@ -86,71 +238,52 @@ async function toBytes(value) {
   throw new Error("Expected docx bytes");
 }
 
+/** docx object trees remain owned by the TypeScript compatibility implementation. */
+export async function parseToDocxOptions(markdown, options) {
+  try {
+    return await (await compatibility()).parseToDocxOptions(markdown, options);
+  } catch (error) {
+    if (error?.name === "MarkdownConversionError") {
+      throw new MarkdownConversionError(error.message, error.context, { cause: error });
+    }
+    throw error;
+  }
+}
+
 export async function convertMarkdownToDocx(markdown, options) {
-  return native().convertMarkdownToDocx(markdown, encodeOptions(options));
+  return invoke("convertMarkdownToDocx", markdown, undefined, undefined, options, "blob");
 }
 
 export async function convertMarkdownToArrayBuffer(markdown, options) {
-  return native().convertMarkdownToArrayBuffer(markdown, encodeOptions(options));
+  return invoke("convertMarkdownToArrayBuffer", markdown, undefined, undefined, options, "arrayBuffer");
 }
 
 export async function convertMarkdownToBuffer(markdown, options) {
-  return native().convertMarkdownToBuffer(markdown, encodeOptions(options));
+  return invoke("convertMarkdownToBuffer", markdown, undefined, undefined, options, "buffer");
 }
 
 export async function convertMarkdownWithReferenceDocx(markdown, referenceDocx, options) {
-  return native().convertMarkdownWithReferenceDocx(
-    markdown,
-    await toBytes(referenceDocx),
-    encodeOptions(options),
-  );
+  return invoke("convertMarkdownWithReferenceDocx", markdown, referenceDocx, undefined, options, "blob");
 }
 
-export async function convertMarkdownWithReferenceDocxToArrayBuffer(
-  markdown,
-  referenceDocx,
-  options,
-) {
-  return native().convertMarkdownWithReferenceDocxToArrayBuffer(
-    markdown,
-    await toBytes(referenceDocx),
-    encodeOptions(options),
-  );
+export async function convertMarkdownWithReferenceDocxToArrayBuffer(markdown, referenceDocx, options) {
+  return invoke("convertMarkdownWithReferenceDocxToArrayBuffer", markdown, referenceDocx, undefined, options, "arrayBuffer");
 }
 
 export async function convertMarkdownWithReferenceDocxToBuffer(markdown, referenceDocx, options) {
-  return native().convertMarkdownWithReferenceDocxToBuffer(
-    markdown,
-    await toBytes(referenceDocx),
-    encodeOptions(options),
-  );
+  return invoke("convertMarkdownWithReferenceDocxToBuffer", markdown, referenceDocx, undefined, options, "buffer");
 }
 
 export async function patchMarkdownInDocx(referenceDocx, patches, options) {
-  rejectFunctions(patches, "patches");
-  return native().patchMarkdownInDocx(
-    await toBytes(referenceDocx),
-    JSON.stringify(patches),
-    encodeOptions(options),
-  );
+  return invoke("patchMarkdownInDocx", undefined, referenceDocx, patches, options, "blob");
 }
 
 export async function patchMarkdownInDocxToArrayBuffer(referenceDocx, patches, options) {
-  rejectFunctions(patches, "patches");
-  return native().patchMarkdownInDocxToArrayBuffer(
-    await toBytes(referenceDocx),
-    JSON.stringify(patches),
-    encodeOptions(options),
-  );
+  return invoke("patchMarkdownInDocxToArrayBuffer", undefined, referenceDocx, patches, options, "arrayBuffer");
 }
 
 export async function patchMarkdownInDocxToBuffer(referenceDocx, patches, options) {
-  rejectFunctions(patches, "patches");
-  return native().patchMarkdownInDocxToBuffer(
-    await toBytes(referenceDocx),
-    JSON.stringify(patches),
-    encodeOptions(options),
-  );
+  return invoke("patchMarkdownInDocxToBuffer", undefined, referenceDocx, patches, options, "buffer");
 }
 
 /**

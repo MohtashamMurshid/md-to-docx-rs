@@ -65,7 +65,9 @@ static ORACLE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct OracleFailure {
     code: String,
+    #[allow(dead_code)] // Retained from the oracle response for diagnostics.
     phase: String,
+    #[allow(dead_code)] // Retained from the oracle response for diagnostics.
     role: String,
     entry: String,
     limit: String,
@@ -74,11 +76,11 @@ struct OracleFailure {
 }
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
 fn oracle_script() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/slice8_oracle.mjs")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/oracle/run.mjs")
 }
 
 fn temp_path(label: &str) -> PathBuf {
@@ -518,7 +520,6 @@ fn writes_every_supported_metadata_property() {
             created: Some("2026-01-02T03:04:05Z".to_string()),
             modified: Some("2026-02-03T04:05:06Z".to_string()),
             custom: Some(custom_props(&[("Build", "v3"), ("ReviewState", "Draft")])),
-            ..DocumentMetadata::default()
         }),
     );
     let core = part(&doc, "docProps/core.xml");

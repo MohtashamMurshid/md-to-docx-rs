@@ -67,7 +67,7 @@ fn decode_base64(input: &str) -> Vec<u8> {
         .bytes()
         .filter(|byte| !byte.is_ascii_whitespace())
         .collect();
-    while packed.len() % 4 != 0 {
+    while !packed.len().is_multiple_of(4) {
         packed.push(b'=');
     }
     let mut out = Vec::new();

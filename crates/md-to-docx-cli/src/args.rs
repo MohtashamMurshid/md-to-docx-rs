@@ -92,9 +92,7 @@ pub fn parse_command(argv: &[String]) -> Result<Command, String> {
     }
     let typescript = parse_like_typescript(argv);
     let clap = parse_with_clap(argv);
-    if let Err(message) = typescript {
-        return Err(message);
-    }
+    typescript?;
     let clap_args = clap.map_err(|error| translate_clap(&error))?;
     if clap_args.help {
         return Ok(Command::Help);
@@ -187,9 +185,7 @@ fn validate_combinations(parsed: &ParsedArgs) -> Result<(), String> {
     if parsed.patches.is_some()
         && (parsed.reference.is_some() || parsed.batch || parsed.input == "-")
     {
-        return Err(
-            "--patches cannot be combined with --reference, --batch, or stdin".to_string(),
-        );
+        return Err("--patches cannot be combined with --reference, --batch, or stdin".to_string());
     }
     if (parsed.watch || parsed.batch) && (parsed.input == "-" || parsed.output == "-") {
         return Err("--watch and --batch require file paths".to_string());

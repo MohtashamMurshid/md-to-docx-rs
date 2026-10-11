@@ -12,7 +12,9 @@ use md_to_docx::{
 
 use crate::options_json::{self, LoadedOptions};
 
-fn load_options(options_json: Option<&str>) -> Result<Option<LoadedOptions>, MarkdownConversionError> {
+fn load_options(
+    options_json: Option<&str>,
+) -> Result<Option<LoadedOptions>, MarkdownConversionError> {
     let Some(text) = options_json else {
         return Ok(None);
     };
@@ -38,6 +40,7 @@ fn reference_options(loaded: Option<&LoadedOptions>) -> ReferenceDocxGenerationO
         Some(loaded) => ReferenceDocxGenerationOptions {
             reference: loaded.reference.clone(),
             aborted: loaded.aborted,
+            convert: loaded.convert.clone(),
         },
         None => ReferenceDocxGenerationOptions::default(),
     }
@@ -100,7 +103,9 @@ pub fn convert_markdown_with_reference_docx_to_buffer(
     convert_markdown_with_reference_docx(markdown, reference_docx, options_json)
 }
 
-fn patches_from_json(patches_json: &str) -> Result<BTreeMap<String, String>, MarkdownConversionError> {
+fn patches_from_json(
+    patches_json: &str,
+) -> Result<BTreeMap<String, String>, MarkdownConversionError> {
     options_json::load_patches_json(patches_json).map_err(MarkdownConversionError::new)
 }
 
@@ -157,15 +162,9 @@ mod tests {
 
     #[test]
     fn blank_font_family_is_rejected() {
-        let error = convert_markdown_to_buffer(
-            "Hello",
-            Some(r#"{"style":{"fontFamily":"   "}}"#),
-        )
-        .unwrap_err();
-        assert!(
-            error.message().contains("Invalid fontFamily"),
-            "{error}"
-        );
+        let error = convert_markdown_to_buffer("Hello", Some(r#"{"style":{"fontFamily":"   "}}"#))
+            .unwrap_err();
+        assert!(error.message().contains("Invalid fontFamily"), "{error}");
     }
 
     #[test]

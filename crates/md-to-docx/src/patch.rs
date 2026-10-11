@@ -11,8 +11,9 @@ use regex::Regex;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use crate::convert::convert_markdown;
+use crate::convert::convert_with_options;
 use crate::model::Block;
+use crate::options::ConvertOptions;
 use crate::parse::parse_markdown;
 
 const START_DELIM: &str = "{{";
@@ -56,6 +57,15 @@ pub fn patch_placeholders(
     template: &[u8],
     patches: &[(&str, &[u8])],
 ) -> Result<Vec<u8>, crate::error::MarkdownConversionError> {
+    patch_placeholders_with_options(template, patches, &ConvertOptions::default())
+}
+
+pub(crate) fn patch_placeholders_with_options(
+    template: &[u8],
+    patches: &[(&str, &[u8])],
+    options: &ConvertOptions,
+) -> Result<Vec<u8>, crate::error::MarkdownConversionError> {
+    options.validate()?;
     validate_patches(patches)?;
     let markdown = patch_markdown(patches)?;
     for (name, text) in &markdown {
@@ -83,7 +93,7 @@ pub fn patch_placeholders(
     for hit in &hits {
         let marker = boundary_marker(hit.patch_index, &mut counter);
         let text = &markdown[hit.patch_index].1;
-        let donor_bytes = convert_markdown(text)?;
+        let donor_bytes = convert_with_options(text, options)?;
         let donor = read_package(&donor_bytes)?;
         let prefix = unused_prefix(&package);
         let offsets = offsets_from(&package);
@@ -174,6 +184,7 @@ fn block_has_comment(block: &Block) -> bool {
         Block::Paragraph(_)
         | Block::Heading(_)
         | Block::CodeBlock(_)
+        | Block::Custom { .. }
         | Block::ThematicBreak
         | Block::PageBreak
         | Block::Caption(_)
@@ -347,9 +358,7 @@ fn merge_donor(
 ) -> Result<(), crate::error::MarkdownConversionError> {
     if let Some(styles) = optional_xml(donor, "word/styles.xml") {
         let target = xml_owned(package, "word/styles.xml").unwrap_or_else(|_| {
-            format!(
-                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:styles>"#
-            )
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:styles>"#.to_string()
         });
         put(
             package,
@@ -736,10 +745,7 @@ fn merge_xmlns(target: &str, donor: &str) -> String {
 
 fn strip_tag(xml: &str, tag: &str) -> String {
     let mut output = xml.to_string();
-    loop {
-        let Some((start, end)) = find_elements(&output, tag).into_iter().next() else {
-            break;
-        };
+    while let Some((start, end)) = find_elements(&output, tag).into_iter().next() {
         if end <= start || end > output.len() {
             break;
         }

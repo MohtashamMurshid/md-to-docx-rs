@@ -1,0 +1,22 @@
+name: Validate
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: crates/md-to-docx/tests/oracle/package-lock.json
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - name: Format, lint, parity and Node tests
+        run: ./scripts/validate.sh
+      - name: Check release benchmark and output semantics
+        run: cargo run --locked --release -p md-to-docx --example benchmark -- --runs 1

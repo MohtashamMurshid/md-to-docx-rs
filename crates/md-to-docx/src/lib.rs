@@ -1,8 +1,7 @@
 //! Markdown to `.docx` bytes.
 //!
-//! Slice 1 accepts one Markdown string. Images, math, footnotes, comments,
-//! TOC, page breaks, sections, headers, reference packages, patch, plugins,
-//! and the CLI stay out of this crate until later slices.
+//! Convert Markdown with typed options, sections, images, math, plugins,
+//! reference documents, and placeholder patching.
 
 mod bookmarks;
 mod captions;
@@ -12,9 +11,10 @@ mod error;
 pub mod highlight;
 mod images;
 mod math;
-mod model;
+pub mod model;
 mod ooxml;
 pub mod options;
+pub mod options_json;
 mod package;
 mod parse;
 mod patch;

@@ -41,6 +41,7 @@ with zipfile.ZipFile(BytesIO(blob)) as package:
 "#;
 
 #[derive(Debug)]
+#[allow(dead_code)] // Each parity suite reads a different subset of the shared projection.
 pub struct Document {
     pub blocks: Vec<Block>,
     pub drawing_count: usize,
@@ -58,12 +59,14 @@ pub struct Document {
 }
 
 #[derive(Debug)]
+#[allow(dead_code, clippy::large_enum_variant)] // Test projection keeps values inline.
 pub enum Block {
     Paragraph(Paragraph),
     Table(Table),
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Each parity suite reads a different subset of the shared projection.
 pub struct Paragraph {
     pub text: String,
     pub heading: Option<String>,
@@ -111,6 +114,7 @@ pub struct MediaFile {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Each parity suite reads a different subset of the shared projection.
 pub struct Footnote {
     pub id: String,
     pub paragraphs: Vec<Paragraph>,
@@ -119,6 +123,7 @@ pub struct Footnote {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Each parity suite reads a different subset of the shared projection.
 pub struct Relationship {
     pub id: String,
     pub rel_type: String,
@@ -134,6 +139,7 @@ pub struct ListInfo {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Each parity suite reads a different subset of the shared projection.
 pub struct Run {
     pub text: String,
     pub bold: bool,
@@ -151,6 +157,7 @@ pub struct Run {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Each parity suite reads a different subset of the shared projection.
 pub struct Table {
     pub columns: usize,
     pub width: Option<String>,
@@ -196,6 +203,7 @@ pub struct SectionProps {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Each parity suite reads a different subset of the shared projection.
 pub struct Story {
     pub path: String,
     pub blocks: Vec<Block>,
@@ -203,6 +211,7 @@ pub struct Story {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Each parity suite reads a different subset of the shared projection.
 pub struct Cell {
     pub paragraphs: Vec<Paragraph>,
     pub tables: Vec<Table>,
@@ -221,6 +230,7 @@ impl Document {
             .collect()
     }
 
+    #[allow(dead_code)] // Used by some, but not all, parity suites.
     pub fn tables(&self) -> Vec<&Table> {
         self.blocks
             .iter()
@@ -231,6 +241,7 @@ impl Document {
             .collect()
     }
 
+    #[allow(dead_code)] // Used by some, but not all, parity suites.
     pub fn paragraph_texts(&self) -> Vec<&str> {
         self.paragraphs()
             .into_iter()
@@ -238,6 +249,7 @@ impl Document {
             .collect()
     }
 
+    #[allow(dead_code)] // Used by some, but not all, parity suites.
     pub fn render(&self) -> String {
         let mut lines = Vec::new();
         for block in &self.blocks {
@@ -394,6 +406,7 @@ pub fn project_docx(bytes: &[u8]) -> Document {
     }
 }
 
+#[allow(dead_code)] // Snapshot rendering is optional for each parity suite.
 fn render_paragraph(paragraph: &Paragraph, indent: &str) -> String {
     let mut head = String::new();
     if let Some(heading) = &paragraph.heading {
@@ -544,10 +557,12 @@ fn render_paragraph(paragraph: &Paragraph, indent: &str) -> String {
     lines.join("\n")
 }
 
+#[allow(dead_code)] // Snapshot rendering is optional for each parity suite.
 fn render_table(table: &Table) -> String {
     render_table_at(table, "")
 }
 
+#[allow(dead_code)] // Snapshot rendering is optional for each parity suite.
 fn render_table_at(table: &Table, indent: &str) -> String {
     let grid = if table.column_widths.is_empty() {
         "-".to_string()

@@ -94,6 +94,53 @@ pub struct ImageOptions {
     transport: Option<RemoteTransport>,
 }
 
+impl Clone for ImageOptions {
+    /// Clone the configuration with a fresh per-document image budget.
+    fn clone(&self) -> Self {
+        Self {
+            remote_enabled: self.remote_enabled,
+            allowed_hosts: self.allowed_hosts.clone(),
+            data_urls_enabled: self.data_urls_enabled,
+            max_images: self.max_images,
+            max_image_bytes: self.max_image_bytes,
+            fetch_timeout_ms: self.fetch_timeout_ms,
+            max_redirects: self.max_redirects,
+            max_url_length: self.max_url_length,
+            base_directory: self.base_directory.clone(),
+            resolve: self.resolve.clone(),
+            missing_image_alt_text: self.missing_image_alt_text,
+            transport: self.transport.clone(),
+            embedded_images: AtomicU32::new(0),
+            failed_remote_attempts: AtomicU32::new(0),
+        }
+    }
+}
+
+impl PartialEq for ImageOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.remote_enabled == other.remote_enabled
+            && self.allowed_hosts == other.allowed_hosts
+            && self.data_urls_enabled == other.data_urls_enabled
+            && self.max_images == other.max_images
+            && self.max_image_bytes == other.max_image_bytes
+            && self.fetch_timeout_ms == other.fetch_timeout_ms
+            && self.max_redirects == other.max_redirects
+            && self.max_url_length == other.max_url_length
+            && self.base_directory == other.base_directory
+            && self.missing_image_alt_text == other.missing_image_alt_text
+            && match (&self.resolve, &other.resolve) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && match (&self.transport, &other.transport) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
 impl Default for ImageOptions {
     fn default() -> Self {
         Self {
@@ -931,6 +978,42 @@ fn lookup_with_timeout(
     }
 }
 
+/// Refresh the timeout before every socket operation, including TLS handshakes.
+/// A server sending occasional bytes must not extend the total request budget.
+struct DeadlineSocket {
+    inner: TcpStream,
+    deadline: Instant,
+}
+impl DeadlineSocket {
+    fn remaining(&self) -> std::io::Result<Duration> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Remote image fetch timed out",
+            ))
+        } else {
+            Ok(remaining)
+        }
+    }
+}
+impl Read for DeadlineSocket {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.set_read_timeout(Some(self.remaining()?))?;
+        self.inner.read(buffer)
+    }
+}
+impl Write for DeadlineSocket {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.inner.set_write_timeout(Some(self.remaining()?))?;
+        self.inner.write(buffer)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.remaining()?;
+        self.inner.flush()
+    }
+}
+
 fn https_get(
     url: &Url,
     ip: IpAddr,
@@ -943,7 +1026,7 @@ fn https_get(
     }
     let port = url.port_or_known_default().unwrap_or(443);
     let address = SocketAddr::new(ip, port);
-    let mut tcp = TcpStream::connect_timeout(&address, remain).map_err(map_io_error)?;
+    let tcp = TcpStream::connect_timeout(&address, remain).map_err(map_io_error)?;
     tcp.set_read_timeout(Some(remain)).map_err(map_io_error)?;
     tcp.set_write_timeout(Some(remain)).map_err(map_io_error)?;
     let host = url_hostname(url);
@@ -951,7 +1034,11 @@ fn https_get(
         .map_err(|_| conversion_error("Failed to fetch image: invalid server name"))?;
     let mut connection = rustls::ClientConnection::new(tls_config()?, server_name)
         .map_err(|error| conversion_error(format!("Failed to fetch image: {error}")))?;
-    let mut tls = rustls::Stream::new(&mut connection, &mut tcp);
+    let mut socket = DeadlineSocket {
+        inner: tcp,
+        deadline,
+    };
+    let mut tls = rustls::Stream::new(&mut connection, &mut socket);
     let request = http_request(url);
     tls.write_all(request.as_bytes()).map_err(map_io_error)?;
     read_http_response(&mut tls, max_bytes)
@@ -1506,7 +1593,7 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
         return Err("invalid base64 length".to_string());
     }
     if remainder != 0 {
-        cleaned.extend(std::iter::repeat('=').take(4 - remainder));
+        cleaned.extend(std::iter::repeat_n('=', 4 - remainder));
     }
     let bytes = cleaned.as_bytes();
     let mut output = Vec::with_capacity(bytes.len() / 4 * 3);
@@ -1591,9 +1678,10 @@ mod tests {
     }
 
     fn remote_options() -> ImageOptions {
-        let mut options = ImageOptions::default();
-        options.remote_enabled = true;
-        options
+        ImageOptions {
+            remote_enabled: true,
+            ..Default::default()
+        }
     }
 
     fn panic_transport() -> RemoteTransport {
@@ -1603,8 +1691,10 @@ mod tests {
     // Jest: "rejects remote images by default"
     #[test]
     fn remote_images_are_off_by_default() {
-        let mut options = ImageOptions::default();
-        options.transport = Some(panic_transport());
+        let options = ImageOptions {
+            transport: Some(panic_transport()),
+            ..Default::default()
+        };
         let error = load_markdown_image("https://example.com/image.png", "remote", None, &options)
             .unwrap_err();
         assert!(message(&error).contains("Remote image fetching is disabled"));
@@ -1705,8 +1795,10 @@ mod tests {
     // Jest: "rejects oversized data URLs before embedding"
     #[test]
     fn oversized_data_urls_are_rejected() {
-        let mut options = ImageOptions::default();
-        options.max_image_bytes = 16;
+        let options = ImageOptions {
+            max_image_bytes: 16,
+            ..Default::default()
+        };
         let source = format!("data:image/png;base64,{}", "A".repeat(128));
         let error = load_markdown_image(&source, "too large", None, &options).unwrap_err();
         assert!(message(&error).contains("Data URL image exceeds maximum size"));
@@ -1731,8 +1823,10 @@ mod tests {
 
     #[test]
     fn data_urls_can_be_disabled() {
-        let mut options = ImageOptions::default();
-        options.data_urls_enabled = false;
+        let options = ImageOptions {
+            data_urls_enabled: false,
+            ..Default::default()
+        };
         let error = load_markdown_image(&data_png(), "one px", None, &options).unwrap_err();
         assert!(message(&error).contains("Data URL images are disabled"));
     }
@@ -1747,13 +1841,15 @@ mod tests {
         assert_eq!((loaded.width_px, loaded.height_px), (1, 1));
 
         let jpeg = TINY_JPEG.to_vec();
-        let mut options = ImageOptions::default();
-        options.resolve = Some(Arc::new(move |_, _| {
-            Ok(Some(ResolvedImage {
-                bytes: jpeg.clone(),
-                content_type: Some("image/jpeg".to_string()),
-            }))
-        }));
+        let options = ImageOptions {
+            resolve: Some(Arc::new(move |_, _| {
+                Ok(Some(ResolvedImage {
+                    bytes: jpeg.clone(),
+                    content_type: Some("image/jpeg".to_string()),
+                }))
+            })),
+            ..Default::default()
+        };
         let loaded = load_markdown_image("picture.jpg", "jpeg", None, &options).unwrap();
         assert_eq!(loaded.bytes, TINY_JPEG);
         assert_eq!(loaded.content_type, "image/jpeg");
@@ -1771,8 +1867,10 @@ mod tests {
 
     #[test]
     fn resolve_none_falls_through_to_data_url() {
-        let mut options = ImageOptions::default();
-        options.resolve = Some(Arc::new(|_, _| Ok(None)));
+        let options = ImageOptions {
+            resolve: Some(Arc::new(|_, _| Ok(None))),
+            ..Default::default()
+        };
         let loaded = load_markdown_image(&data_png(), "one px", None, &options).unwrap();
         assert_eq!(loaded.bytes, one_px_png());
     }
@@ -1804,13 +1902,15 @@ mod tests {
             )
             .unwrap();
         assert!(looks_like_webp(&webp));
-        let mut options = ImageOptions::default();
-        options.resolve = Some(Arc::new(move |_, _| {
-            Ok(Some(ResolvedImage {
-                bytes: webp.clone(),
-                content_type: Some("image/webp".to_string()),
-            }))
-        }));
+        let options = ImageOptions {
+            resolve: Some(Arc::new(move |_, _| {
+                Ok(Some(ResolvedImage {
+                    bytes: webp.clone(),
+                    content_type: Some("image/webp".to_string()),
+                }))
+            })),
+            ..Default::default()
+        };
         let loaded = load_markdown_image("photo.webp", "webp", None, &options).unwrap();
         assert_eq!(loaded.content_type, "image/png");
         assert!(loaded.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
@@ -2238,8 +2338,10 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(outside.join("secret.png"), base.join("link.png")).unwrap();
 
-        let mut options = ImageOptions::default();
-        options.base_directory = Some(base.clone());
+        let mut options = ImageOptions {
+            base_directory: Some(base.clone()),
+            ..Default::default()
+        };
         let loaded = load_markdown_image("ok.png", "local", None, &options).unwrap();
         assert_eq!(loaded.bytes, png);
         let nested = load_markdown_image("sub/../ok.png", "local", None, &options).unwrap();

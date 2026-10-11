@@ -21,6 +21,11 @@ pub struct Document {
 /// A block in document order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
+    /// Custom block inserted by a trusted AST transform and handled by a plugin.
+    Custom {
+        node_type: String,
+        value: String,
+    },
     Paragraph(Paragraph),
     Heading(Heading),
     List(List),

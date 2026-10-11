@@ -49,24 +49,35 @@ pub fn convert_with_reference(
             &[],
         ));
     }
+    crate::options::validate_reference_options(options.reference.as_ref())?;
     enforce_reference_limits(template, options.reference.as_ref())?;
-    let mut convert_options = ConvertOptions::default();
+    let mut convert_options = options.convert.clone();
     if options
         .reference
         .as_ref()
         .is_none_or(|mode| mode.preserve_page_layout())
     {
         if let Some(page) = reference_page(template) {
-            convert_options.template = Some(SectionConfig {
-                page: Some(page),
-                ..SectionConfig::default()
-            });
+            let template = convert_options
+                .template
+                .get_or_insert_with(SectionConfig::default);
+            if template.page.is_none() {
+                template.page = Some(page);
+            }
         }
     }
     let generated = convert_with_options(markdown, &convert_options)?;
     let generated = adopt_explicit_styles(template, &generated, options.reference.as_ref())?;
     let generated = ensure_footnote_text_style(&generated)?;
-    crate::reference::apply_reference(template, &generated)
+    if options.reference.is_none() {
+        crate::reference::apply_reference(template, &generated)
+    } else {
+        crate::reference::apply_reference_with_options(
+            template,
+            &generated,
+            options.reference.as_ref(),
+        )
+    }
 }
 
 /// Convert each patch as Markdown, then replace the first `{{name}}` hit.
@@ -76,8 +87,17 @@ pub fn patch_markdown(
     options: &PatchMarkdownOptions,
 ) -> Result<Vec<u8>, MarkdownConversionError> {
     options.validate()?;
+    let mut convert_options = options.convert.clone();
+    let stricter_limit = |outer: Option<u32>, inner: Option<u32>| match (outer, inner) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    convert_options.max_input_length =
+        stricter_limit(options.max_input_length, convert_options.max_input_length);
+    convert_options.max_elements =
+        stricter_limit(options.max_elements, convert_options.max_elements);
     for markdown in patches.values() {
-        enforce_patch_limits(markdown, options)?;
+        enforce_input_length(markdown, &convert_options)?;
     }
     let source = template.to_vec();
     let (template, patches) = expand_repeated_placeholders(template, patches, options.recursive)?;
@@ -85,7 +105,8 @@ pub fn patch_markdown(
         .iter()
         .map(|(name, markdown)| (name.as_str(), markdown.as_bytes()))
         .collect();
-    let mut patched = crate::patch::patch_placeholders(&template, &owned)?;
+    let mut patched =
+        crate::patch::patch_placeholders_with_options(&template, &owned, &convert_options)?;
     patched = finish_patch_document(&source, &patched)?;
     if let Some(width) = options.table_width_twips {
         patched = rewrite_table_widths(&patched, width)?;
@@ -108,26 +129,6 @@ pub fn apply_document_metadata(
     let mut parts = package::unpack(bytes)?;
     parts.metadata = Some(package_metadata(&normalized));
     package::pack(&parts)
-}
-
-fn enforce_patch_limits(
-    markdown: &str,
-    options: &PatchMarkdownOptions,
-) -> Result<(), MarkdownConversionError> {
-    if let Some(max) = options.max_input_length {
-        if utf16_len(markdown) > usize::try_from(max).unwrap_or(usize::MAX) {
-            return Err(MarkdownConversionError::new(
-                "Markdown input length exceeds maxInputLength",
-            ));
-        }
-    }
-    if options.max_elements.is_some() {
-        let mut convert_options = ConvertOptions::default();
-        convert_options.max_elements = options.max_elements;
-        convert_options.validate()?;
-        parse::prepare(markdown, &convert_options)?;
-    }
-    Ok(())
 }
 
 /// Convert `markdown` with section, header, footer, style, and TOC options.
@@ -168,8 +169,8 @@ fn pack_with_metadata(
         let normalized = normalize_document_metadata(metadata)?;
         parts.metadata = Some(package_metadata(&normalized));
     }
-    let bytes = package::pack(&parts)?;
-    paint_accessibility(bytes, options)
+    paint_accessibility(&mut parts, options)?;
+    package::pack(&parts)
 }
 
 fn package_metadata(metadata: &NormalizedMetadata) -> PackageMetadata {
@@ -357,11 +358,11 @@ fn reference_page(template: &[u8]) -> Option<PageInput> {
     let size = size_tag.map(|tag| SizeInput {
         width: xml_u32(&tag, "w:w"),
         height: xml_u32(&tag, "w:h"),
-        orientation: xml_attr(&tag, "w:orient").and_then(|value| {
+        orientation: xml_attr(&tag, "w:orient").map(|value| {
             if value.eq_ignore_ascii_case("landscape") {
-                Some(Orientation::Landscape)
+                Orientation::Landscape
             } else {
-                Some(Orientation::Portrait)
+                Orientation::Portrait
             }
         }),
     });
@@ -933,9 +934,9 @@ struct SectionPaint {
 }
 
 fn paint_accessibility(
-    bytes: Vec<u8>,
+    parts: &mut ooxml::Parts,
     options: &ConvertOptions,
-) -> Result<Vec<u8>, MarkdownConversionError> {
+) -> Result<(), MarkdownConversionError> {
     let document_language = options
         .style
         .as_ref()
@@ -957,9 +958,8 @@ fn paint_accessibility(
             .iter()
             .any(|section| section.language.is_some() || section.rtl);
     if !needs_paint {
-        return Ok(bytes);
+        return Ok(());
     }
-    let mut parts = package::unpack(&bytes)?;
     let styles = String::from_utf8(parts.styles.clone())
         .map_err(|err| MarkdownConversionError::new(err.to_string()))?;
     parts.styles =
@@ -967,7 +967,7 @@ fn paint_accessibility(
     let document = String::from_utf8(parts.document.clone())
         .map_err(|err| MarkdownConversionError::new(err.to_string()))?;
     parts.document = paint_document_language(&document, &section_paints).into_bytes();
-    package::pack(&parts)
+    Ok(())
 }
 
 fn section_paints(

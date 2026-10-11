@@ -67,6 +67,7 @@ fn run_named<'a>(paragraph: &'a Paragraph, text: &str) -> &'a Run {
 }
 
 #[track_caller]
+#[allow(clippy::too_many_arguments)] // Expected run properties form one fixture assertion.
 fn assert_run(
     paragraph: &Paragraph,
     text: &str,
@@ -120,7 +121,7 @@ fn assert_dxa_width(table: &Table, twips: &str) {
 }
 
 #[track_caller]
-fn cell<'a>(table: &'a Table, row: usize, column: usize) -> &'a Paragraph {
+fn cell(table: &Table, row: usize, column: usize) -> &Paragraph {
     table
         .rows
         .get(row)
@@ -294,8 +295,8 @@ fn lists_inside_blockquotes() {
     );
     assert_texts(&doc, &["Quoted intro", "list item 1", "list item 2"]);
     assert!(paragraphs(&doc)[0].runs.iter().any(|run| run.italic));
-    assert_list(&paragraphs(&doc)[1], false, 1, 0);
-    assert_list(&paragraphs(&doc)[2], false, 1, 0);
+    assert_list(paragraphs(&doc)[1], false, 1, 0);
+    assert_list(paragraphs(&doc)[2], false, 1, 0);
 }
 
 // Jest: "renders nested blockquotes with all nested text preserved"

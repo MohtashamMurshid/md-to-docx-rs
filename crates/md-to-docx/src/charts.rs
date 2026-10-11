@@ -45,9 +45,39 @@ pub fn render_chart(
     width_px: u32,
     height_px: u32,
 ) -> Result<Vec<u8>, MarkdownConversionError> {
+    render_chart_with_limits(
+        definition,
+        width_px,
+        height_px,
+        DEFAULT_MAX_CHART_WIDTH,
+        DEFAULT_MAX_CHART_HEIGHT,
+    )
+}
+
+pub(crate) fn resolved_size(
+    definition: &str,
+    width: u32,
+    height: u32,
+    max_width: u32,
+    max_height: u32,
+) -> Result<(u32, u32), MarkdownConversionError> {
     let chart = parse_chart(definition)?;
-    let width = resolve_dimension(chart.width, width_px, DEFAULT_MAX_CHART_WIDTH, "width")?;
-    let height = resolve_dimension(chart.height, height_px, DEFAULT_MAX_CHART_HEIGHT, "height")?;
+    Ok((
+        resolve_dimension(chart.width, width, max_width, "width")?,
+        resolve_dimension(chart.height, height, max_height, "height")?,
+    ))
+}
+
+pub(crate) fn render_chart_with_limits(
+    definition: &str,
+    width_px: u32,
+    height_px: u32,
+    max_width: u32,
+    max_height: u32,
+) -> Result<Vec<u8>, MarkdownConversionError> {
+    let chart = parse_chart(definition)?;
+    let width = resolve_dimension(chart.width, width_px, max_width, "width")?;
+    let height = resolve_dimension(chart.height, height_px, max_height, "height")?;
     let mut raster = Raster::new(width, height)?;
     raster.clear(BACKGROUND);
     match chart.kind {

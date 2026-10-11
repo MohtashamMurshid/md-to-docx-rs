@@ -1,0 +1,44 @@
+{
+  "name": "md-to-docx-rs",
+  "version": "0.1.0",
+  "description": "Native Rust Markdown to DOCX conversion for Node.js",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "browser": "./browser.js",
+      "import": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "md-to-docx-napi.node",
+    "browser.js"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:types": "tsc -p test/tsconfig.json"
+  },
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "@mohtasham/md-to-docx": "4.0.1"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "katex": "0.18.2",
+    "docx": "9.5.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "22.14.0"
+  }
+}

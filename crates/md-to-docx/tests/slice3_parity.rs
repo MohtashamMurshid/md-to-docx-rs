@@ -290,7 +290,7 @@ fn heading6_size_and_alignment() {
     assert_eq!(paragraphs[0].heading.as_deref(), Some("Heading6"));
     assert_eq!(paragraphs[0].text, "H6 custom");
     assert_eq!(paragraphs[0].align.as_deref(), Some("right"));
-    assert_eq!(run_named(&paragraphs[0], "H6 custom").size, Some(18));
+    assert_eq!(run_named(paragraphs[0], "H6 custom").size, Some(18));
     assert_eq!(paragraphs[0].bookmarks, ["_Toc_H6_custom_1"]);
 }
 
@@ -323,7 +323,7 @@ fn paragraph_and_blockquote_alignment() {
     assert_eq!(paragraphs[1].align, None);
     assert_eq!(paragraphs[2].align.as_deref(), Some("both"));
     assert_eq!(
-        run_named(&paragraphs[0], "Left paragraph here.").size,
+        run_named(paragraphs[0], "Left paragraph here.").size,
         Some(24)
     );
 }
@@ -844,14 +844,14 @@ fn per_section_paragraph_size() {
     );
     let paragraphs = paragraphs(&doc);
     assert_eq!(paragraphs[0].heading.as_deref(), Some("Heading1"));
-    assert_eq!(run_named(&paragraphs[0], "Section One").size, Some(32));
+    assert_eq!(run_named(paragraphs[0], "Section One").size, Some(32));
     assert_eq!(
-        run_named(&paragraphs[1], "Smaller text section.").size,
+        run_named(paragraphs[1], "Smaller text section.").size,
         Some(20)
     );
-    assert_eq!(run_named(&paragraphs[2], "Section Two").size, Some(32));
+    assert_eq!(run_named(paragraphs[2], "Section Two").size, Some(32));
     assert_eq!(
-        run_named(&paragraphs[3], "Larger text section.").size,
+        run_named(paragraphs[3], "Larger text section.").size,
         Some(30)
     );
     assert_eq!(paragraphs[0].bookmarks, ["_Toc_Section_One_1"]);
@@ -902,11 +902,11 @@ fn style_precedence_global_template_section() {
     let paragraphs = paragraphs(&doc);
     assert_eq!(paragraphs[0].align.as_deref(), Some("center"));
     assert_eq!(
-        run_named(&paragraphs[0], "Template wins alignment.").size,
+        run_named(paragraphs[0], "Template wins alignment.").size,
         Some(22)
     );
     assert_eq!(paragraphs[1].align.as_deref(), Some("right"));
-    assert_eq!(run_named(&paragraphs[1], "Section wins.").size, Some(28));
+    assert_eq!(run_named(paragraphs[1], "Section wins.").size, Some(28));
     assert!(!doc.paragraph_texts().contains(&"ignored"));
 }
 
@@ -1360,7 +1360,7 @@ fn header_and_footer_links_resolve_across_sections() {
         let paragraphs = story_paragraphs(story(&doc, file));
         assert_eq!(paragraphs.len(), 1);
         assert_eq!(
-            run_named(&paragraphs[0], "Next").anchor.as_deref(),
+            run_named(paragraphs[0], "Next").anchor.as_deref(),
             Some("_Toc_Body_2")
         );
     }

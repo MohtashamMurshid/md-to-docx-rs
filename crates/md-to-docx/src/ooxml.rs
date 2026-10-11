@@ -87,17 +87,19 @@ impl Parts {
 /// Turn a document model into WordprocessingML parts.
 pub fn render(doc: &Document) -> Result<Parts, MarkdownConversionError> {
     let footnotes = gather_footnotes(&doc.children);
-    let mut state = State::default();
-    state.content_width = CONTENT_WIDTH;
-    state.toc_native = true;
-    state.toc_page_numbers = true;
-    state.toc_dot_leaders = true;
-    state.toc_update_on_open = true;
-    state.toc_title = "Table of Contents".to_string();
-    state.toc_min_depth = 1;
-    state.toc_max_depth = 6;
-    state.toc_paragraph_size = 24;
-    state.footnote_order = footnotes.iter().map(|(id, _)| id.clone()).collect();
+    let mut state = State {
+        content_width: CONTENT_WIDTH,
+        toc_native: true,
+        toc_page_numbers: true,
+        toc_dot_leaders: true,
+        toc_update_on_open: true,
+        toc_title: "Table of Contents".to_string(),
+        toc_min_depth: 1,
+        toc_max_depth: 6,
+        toc_paragraph_size: 24,
+        footnote_order: footnotes.iter().map(|(id, _)| id.clone()).collect(),
+        ..State::default()
+    };
     let document = state.write_document(doc)?;
     let (footnotes_xml, footnote_rels) = if footnotes.is_empty() {
         (None, None)
@@ -144,19 +146,21 @@ pub fn render_prepared(
     plant_prepared_images(&mut doc, markdown, options);
     let blocks = prepared_body_blocks(&doc);
     let footnotes = gather_footnotes(&blocks);
-    let mut state = State::default();
-    state.content_width = CONTENT_WIDTH;
-    state.toc_native = doc.toc.mode != TocMode::Links;
-    state.toc_page_numbers = doc.toc.page_numbers;
-    state.toc_dot_leaders = doc.toc.dot_leaders;
-    state.toc_update_on_open = doc.toc.update_fields_on_open;
-    state.toc_title = doc.toc.title.clone();
-    state.toc_min_depth = doc.toc.min_depth;
-    state.toc_max_depth = doc.toc.max_depth;
-    state.toc_paragraph_size = 24;
-    state.update_fields = doc.update_fields;
-    state.caption_options = options.captions.clone();
-    state.footnote_order = footnotes.iter().map(|(id, _)| id.clone()).collect();
+    let mut state = State {
+        content_width: CONTENT_WIDTH,
+        toc_native: doc.toc.mode != TocMode::Links,
+        toc_page_numbers: doc.toc.page_numbers,
+        toc_dot_leaders: doc.toc.dot_leaders,
+        toc_update_on_open: doc.toc.update_fields_on_open,
+        toc_title: doc.toc.title.clone(),
+        toc_min_depth: doc.toc.min_depth,
+        toc_max_depth: doc.toc.max_depth,
+        toc_paragraph_size: 24,
+        update_fields: doc.update_fields,
+        caption_options: options.captions.clone(),
+        footnote_order: footnotes.iter().map(|(id, _)| id.clone()).collect(),
+        ..State::default()
+    };
     let document = state.write_prepared(&doc)?;
     let (footnotes_xml, footnote_rels) = if footnotes.is_empty() {
         (None, None)
@@ -601,6 +605,7 @@ fn insert_blank_images(blocks: &mut [Block], urls: &mut impl Iterator<Item = Str
             Block::Heading(_)
             | Block::CodeBlock(_)
             | Block::Table(_)
+            | Block::Custom { .. }
             | Block::ThematicBreak
             | Block::PageBreak
             | Block::Comment(_)
@@ -824,6 +829,7 @@ impl State {
             Block::Paragraph(_)
             | Block::CodeBlock(_)
             | Block::Table(_)
+            | Block::Custom { .. }
             | Block::ThematicBreak
             | Block::PageBreak
             | Block::Comment(_)
@@ -890,6 +896,7 @@ impl State {
             | Block::Heading(_)
             | Block::CodeBlock(_)
             | Block::Table(_)
+            | Block::Custom { .. }
             | Block::ThematicBreak
             | Block::PageBreak
             | Block::Comment(_)
@@ -938,10 +945,9 @@ impl State {
     }
 
     fn assign_story_ids(&mut self, has_footnotes: bool) {
-        let mut number = 3 + self.links.len() + usize::from(has_footnotes);
-        for rel in &mut self.story_rels {
+        let first_id = 3 + self.links.len() + usize::from(has_footnotes);
+        for (number, rel) in (first_id..).zip(&mut self.story_rels) {
             rel.id = format!("rId{number}");
-            number += 1;
         }
     }
 
@@ -1591,6 +1597,9 @@ impl State {
         quote: Option<&QuoteCtx>,
     ) -> Result<(), MarkdownConversionError> {
         match block {
+            Block::Custom { .. } => Err(MarkdownConversionError::new(
+                "Custom plugin block was not resolved before rendering",
+            )),
             Block::Paragraph(paragraph) if is_toc_paragraph(paragraph) => self.write_toc(xml),
             Block::Paragraph(paragraph) => self.write_paragraph(xml, paragraph, quote),
             Block::Heading(heading) if self.in_footnote => {
@@ -1666,10 +1675,11 @@ impl State {
                 None,
                 bytes,
                 "image/png",
-                None,
-                None,
-                nonzero(width_px),
-                nonzero(height_px),
+                ImageDimensions {
+                    hint_width: nonzero(width_px),
+                    hint_height: nonzero(height_px),
+                    ..ImageDimensions::default()
+                },
             )
         })
     }
@@ -2820,10 +2830,12 @@ impl State {
             image_title(image),
             bytes,
             &image.content_type,
-            nonzero(image.width_px),
-            nonzero(image.height_px),
-            hint_width,
-            hint_height,
+            ImageDimensions {
+                known_width: nonzero(image.width_px),
+                known_height: nonzero(image.height_px),
+                hint_width,
+                hint_height,
+            },
         )
     }
 
@@ -2846,10 +2858,11 @@ impl State {
             title,
             &bytes,
             content_type,
-            None,
-            None,
-            hint_width,
-            hint_height,
+            ImageDimensions {
+                hint_width,
+                hint_height,
+                ..ImageDimensions::default()
+            },
         )
     }
 
@@ -2860,42 +2873,18 @@ impl State {
         title: Option<&str>,
         bytes: &[u8],
         content_type: &str,
-        known_width: Option<u32>,
-        known_height: Option<u32>,
-        hint_width: Option<u32>,
-        hint_height: Option<u32>,
+        dimensions: ImageDimensions,
     ) -> Result<(), MarkdownConversionError> {
+        let ImageDimensions {
+            known_width,
+            known_height,
+            hint_width,
+            hint_height,
+        } = dimensions;
         let sniffed = sniff_raster(bytes);
         let extension = sniffed
             .map(|raster| raster.extension)
             .unwrap_or_else(|| extension_for_content_type(content_type));
-        self.store_and_draw(
-            xml,
-            alt,
-            title,
-            bytes,
-            extension,
-            hint_width,
-            hint_height,
-            sniffed,
-            known_width,
-            known_height,
-        )
-    }
-
-    fn store_and_draw(
-        &mut self,
-        xml: &mut Xml,
-        alt: &str,
-        title: Option<&str>,
-        bytes: &[u8],
-        extension: &str,
-        hint_width: Option<u32>,
-        hint_height: Option<u32>,
-        sniffed: Option<RasterKind>,
-        known_width: Option<u32>,
-        known_height: Option<u32>,
-    ) -> Result<(), MarkdownConversionError> {
         if let Some((extension, content_type)) = static_media_type(extension) {
             if !self
                 .media_types
@@ -3649,6 +3638,7 @@ fn gather_footnote_blocks<'a>(
             | Block::Heading(_)
             | Block::CodeBlock(_)
             | Block::Table(_)
+            | Block::Custom { .. }
             | Block::ThematicBreak
             | Block::PageBreak
             | Block::Comment(_)
@@ -4129,7 +4119,9 @@ fn timestamp_w3cdtf(value: &str) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
-fn parse_timestamp(value: &str) -> Option<(i32, i32, i32, i32, i32, i32, i32, i32)> {
+type TimestampParts = (i32, i32, i32, i32, i32, i32, i32, i32);
+
+fn parse_timestamp(value: &str) -> Option<TimestampParts> {
     let mut index = 0;
     let year = take_digits(value, &mut index, 4)?;
     take_char(value, &mut index, '-')?;
@@ -4435,8 +4427,7 @@ fn write_styles(style: Option<&ResolvedStyle>) -> Result<Vec<u8>, MarkdownConver
             &named,
             &display,
             size,
-            before,
-            after,
+            (before, after),
             level - 1,
             style,
         )?;
@@ -4445,8 +4436,7 @@ fn write_styles(style: Option<&ResolvedStyle>) -> Result<Vec<u8>, MarkdownConver
             &numeric,
             &display,
             size,
-            before,
-            after,
+            (before, after),
             level - 1,
             style,
         )?;
@@ -4643,11 +4633,11 @@ fn write_heading_style(
     id: &str,
     name: &str,
     size: u32,
-    before: u32,
-    after: u32,
+    spacing_values: (u32, u32),
     outline: u8,
     style: Option<&ResolvedStyle>,
 ) -> Result<(), MarkdownConversionError> {
+    let (before, after) = spacing_values;
     xml.start("w:style", &[("w:type", "paragraph"), ("w:styleId", id)])?;
     xml.empty("w:name", &[("w:val", name)])?;
     xml.empty("w:basedOn", &[("w:val", "Normal")])?;
@@ -4722,13 +4712,13 @@ fn write_abstract(
     let id = id.to_string();
     xml.start("w:abstractNum", &[("w:abstractNumId", &id)])?;
     xml.empty("w:multiLevelType", &[("w:val", "hybridMultilevel")])?;
-    for level in 0..9 {
+    for (level, bullet_text) in BULLETS.iter().enumerate() {
         let ilvl = level.to_string();
         let left = (720 * (level + 1)).to_string();
         let hanging = if bullet { "360" } else { "260" };
         let start_value = start.to_string();
         let text = if bullet {
-            BULLETS[level].to_string()
+            bullet_text.to_string()
         } else {
             format!("%{}.", level + 1)
         };
@@ -4833,6 +4823,7 @@ fn block_has_image(block: &Block) -> bool {
                 })
             }),
         Block::CodeBlock(_)
+        | Block::Custom { .. }
         | Block::ThematicBreak
         | Block::PageBreak
         | Block::Comment(_)
@@ -4907,10 +4898,17 @@ fn normalize_footnote_label(label: &str) -> String {
     label.trim().to_lowercase()
 }
 
+#[derive(Default)]
+struct ImageDimensions {
+    known_width: Option<u32>,
+    known_height: Option<u32>,
+    hint_width: Option<u32>,
+    hint_height: Option<u32>,
+}
+
 #[derive(Clone, Copy)]
 struct RasterKind {
     extension: &'static str,
-    content_type: &'static str,
     width: Option<u32>,
     height: Option<u32>,
 }
@@ -5045,6 +5043,7 @@ fn stamp_blocks(blocks: &mut [Block], labels: &mut impl Iterator<Item = ImageLab
                 }
             }
             Block::CodeBlock(_)
+            | Block::Custom { .. }
             | Block::ThematicBreak
             | Block::PageBreak
             | Block::Comment(_)
@@ -5153,7 +5152,6 @@ fn sniff_raster(bytes: &[u8]) -> Option<RasterKind> {
         let (width, height) = png_size(bytes);
         return Some(RasterKind {
             extension: "png",
-            content_type: "image/png",
             width,
             height,
         });
@@ -5162,7 +5160,6 @@ fn sniff_raster(bytes: &[u8]) -> Option<RasterKind> {
         let (width, height) = jpeg_size(bytes);
         return Some(RasterKind {
             extension: "jpeg",
-            content_type: "image/jpeg",
             width,
             height,
         });
@@ -5171,7 +5168,6 @@ fn sniff_raster(bytes: &[u8]) -> Option<RasterKind> {
         let (width, height) = gif_size(bytes);
         return Some(RasterKind {
             extension: "gif",
-            content_type: "image/gif",
             width,
             height,
         });
@@ -5386,6 +5382,38 @@ mod tests {
         Heading, Inline, List, ListItem, Paragraph, Table, TableAlign, TableCell,
     };
     use crate::package::pack;
+
+    #[test]
+    fn raster_embedding_preserves_labels_and_dimension_precedence() {
+        let bytes = super::decode_base64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1sAAAAASUVORK5CYII=").unwrap();
+        let mut state = super::State::default();
+        let mut xml = super::Xml::new().unwrap();
+        state
+            .embed_raster(
+                &mut xml,
+                "Example & image",
+                Some("Title"),
+                &bytes,
+                "image/jpeg",
+                super::ImageDimensions {
+                    known_width: Some(20),
+                    known_height: Some(10),
+                    hint_width: Some(40),
+                    hint_height: None,
+                },
+            )
+            .unwrap();
+        let drawing = String::from_utf8(xml.finish()).unwrap();
+        // Sniffed 1x1 dimensions take precedence over the known 20x10 size.
+        assert!(drawing.contains(r#"<wp:extent cx="381000" cy="381000"/>"#));
+        assert!(drawing.contains(r#"descr="Example &amp; image""#));
+        assert!(drawing.contains(r#"name="Title""#));
+        assert_eq!(
+            state.media,
+            vec![("word/media/image1.png".to_string(), bytes)]
+        );
+        assert_eq!(state.media_types, vec![("png", "image/png")]);
+    }
 
     fn pack_parts(doc: &Document) -> Vec<u8> {
         let parts = render(doc).expect("render");

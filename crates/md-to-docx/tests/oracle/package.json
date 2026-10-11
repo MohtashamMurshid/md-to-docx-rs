@@ -1,0 +1,14 @@
+{
+  "name": "md-to-docx-parity-oracle",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mohtasham/md-to-docx": "4.0.1",
+    "jszip": "3.10.1",
+    "docx": "9.5.0"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "katex": "0.18.2"
+  }
+}

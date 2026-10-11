@@ -15,6 +15,8 @@ use crate::error::{ErrorContext, MarkdownConversionError};
 /// conversion [`crate::convert::convert_markdown`] already performs.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConvertOptions {
+    /// Reject a request whose cancellation flag was already set.
+    pub aborted: bool,
     pub style: Option<StyleOverrides>,
     pub template: Option<SectionConfig>,
     pub sections: Option<Vec<DocumentSection>>,
@@ -25,6 +27,8 @@ pub struct ConvertOptions {
     pub chart_rendering: Option<ChartRenderingOptions>,
     pub mermaid_rendering: Option<MermaidRenderingOptions>,
     pub code_highlighting: Option<CodeHighlightingOptions>,
+    /// Image configuration; budgets restart for every conversion.
+    pub image_handling: Option<crate::images::ImageOptions>,
     pub text_replacements: Option<Vec<TextReplacement>>,
     pub text_replacement_mode: Option<TextReplacementMode>,
     pub max_input_length: Option<u32>,
@@ -52,6 +56,7 @@ impl ConvertOptions {
             && self.math_rendering.is_none()
             && self.chart_rendering.is_none()
             && self.mermaid_rendering.is_none()
+            && self.image_handling.is_none()
             && !self.highlighting_enabled()
             && self
                 .text_replacements
@@ -79,6 +84,12 @@ impl ConvertOptions {
     /// A present family that trims to nothing is an error. `font_familly` is
     /// checked only when it supplies the family, matching `normalizeStyleInput`.
     pub fn validate(&self) -> Result<(), MarkdownConversionError> {
+        if self.aborted {
+            return Err(MarkdownConversionError::with_context(
+                "Markdown conversion was aborted",
+                BTreeMap::from([("code".into(), "ABORTED".into())]),
+            ));
+        }
         validate_style(self.style.as_ref(), "options.style")?;
         if let Some(template) = &self.template {
             validate_style(template.style.as_ref(), "options.template.style")?;
@@ -201,12 +212,23 @@ pub enum ChartInvalidBehavior {
     Invalid,
 }
 
+type ChartRenderFn =
+    dyn Fn(&str, u32, u32) -> Result<Vec<u8>, MarkdownConversionError> + Send + Sync;
+type MermaidRenderFn = dyn Fn(&MermaidRenderInput) -> Result<Option<MermaidRenderOutput>, MarkdownConversionError>
+    + Send
+    + Sync;
+type PluginFenceRenderFn =
+    dyn Fn(&PluginFenceInput) -> Result<Vec<PluginBlock>, MarkdownConversionError> + Send + Sync;
+type PluginNodeRenderFn = dyn Fn(&PluginBlockNodeInput) -> Result<Vec<PluginBlock>, MarkdownConversionError>
+    + Send
+    + Sync;
+
 /// Optional replacement for the built-in chart rasterizer.
 ///
 /// The arguments are the fence body and the resolved pixel width and height.
 #[derive(Clone)]
 pub struct ChartRenderer {
-    render: Arc<dyn Fn(&str, u32, u32) -> Result<Vec<u8>, MarkdownConversionError> + Send + Sync>,
+    render: Arc<ChartRenderFn>,
 }
 
 impl ChartRenderer {
@@ -279,11 +301,7 @@ pub struct MermaidRenderOutput {
 /// Caller-supplied Mermaid renderer. `Ok(None)` means no image was produced.
 #[derive(Clone)]
 pub struct MermaidRenderer {
-    render: Arc<
-        dyn Fn(&MermaidRenderInput) -> Result<Option<MermaidRenderOutput>, MarkdownConversionError>
-            + Send
-            + Sync,
-    >,
+    render: Arc<MermaidRenderFn>,
 }
 
 impl MermaidRenderer {
@@ -1968,8 +1986,10 @@ pub struct ReferenceDocxModeOptions {
 /// Bytes-API options for generating a document from a reference package.
 ///
 /// `aborted` stands in for an already-aborted `AbortSignal`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ReferenceDocxGenerationOptions {
+    /// Conversion settings applied before adopting reference presentation.
+    pub convert: ConvertOptions,
     pub reference: Option<ReferenceDocxModeOptions>,
     pub aborted: bool,
 }
@@ -2020,7 +2040,7 @@ impl ReferenceDocxModeOptions {
     }
 }
 
-fn validate_reference_options(
+pub(crate) fn validate_reference_options(
     reference: Option<&ReferenceDocxModeOptions>,
 ) -> Result<(), MarkdownConversionError> {
     if let Some(reference) = reference {
@@ -2076,6 +2096,8 @@ impl Default for PlaceholderDelimiters {
 /// not replace explicit formatting. Delimiters default to `{{` and `}}`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PatchMarkdownOptions {
+    /// Conversion settings for the Markdown inserted into each placeholder.
+    pub convert: ConvertOptions,
     pub metadata: Option<DocumentMetadata>,
     pub keep_original_styles: Option<bool>,
     pub placeholder_delimiters: Option<PlaceholderDelimiters>,
@@ -2098,6 +2120,7 @@ impl PatchMarkdownOptions {
     }
 
     pub fn validate(&self) -> Result<(), MarkdownConversionError> {
+        self.convert.validate()?;
         validate_document_metadata(self.metadata.as_ref())?;
         validate_positive_integer(self.max_input_length, "maxInputLength")?;
         validate_positive_integer(self.max_elements, "maxElements")?;
@@ -2174,6 +2197,7 @@ pub struct PluginFenceInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginBlockNodeInput {
     pub node_type: String,
+    pub value: String,
 }
 
 /// Called once, in priority order, before any section is rendered.
@@ -2212,21 +2236,21 @@ impl PartialEq for PluginSetup {
 /// Runs after text replacements and before the element limit, once per section.
 #[derive(Clone)]
 pub struct PluginAstTransform {
-    transform: Arc<dyn Fn() + Send + Sync>,
+    transform: Arc<dyn Fn(&mut crate::model::Document) + Send + Sync>,
 }
 
 impl PluginAstTransform {
     pub fn new<F>(transform: F) -> Self
     where
-        F: Fn() + Send + Sync + 'static,
+        F: Fn(&mut crate::model::Document) + Send + Sync + 'static,
     {
         Self {
             transform: Arc::new(transform),
         }
     }
 
-    pub(crate) fn call(&self) {
-        (self.transform)();
+    pub(crate) fn call(&self, document: &mut crate::model::Document) {
+        (self.transform)(document);
     }
 }
 
@@ -2245,11 +2269,7 @@ impl PartialEq for PluginAstTransform {
 /// Fence renderer. `render_fn` builds one from a closure.
 #[derive(Clone)]
 pub struct PluginFenceRender {
-    render: Arc<
-        dyn Fn(&PluginFenceInput) -> Result<Vec<PluginBlock>, MarkdownConversionError>
-            + Send
-            + Sync,
-    >,
+    render: Arc<PluginFenceRenderFn>,
 }
 
 impl PluginFenceRender {
@@ -2276,11 +2296,7 @@ impl PartialEq for PluginFenceRender {
 /// Block-node renderer. `render_fn` builds one from a closure.
 #[derive(Clone)]
 pub struct PluginBlockNodeRender {
-    render: Arc<
-        dyn Fn(&PluginBlockNodeInput) -> Result<Vec<PluginBlock>, MarkdownConversionError>
-            + Send
-            + Sync,
-    >,
+    render: Arc<PluginNodeRenderFn>,
 }
 
 impl PluginBlockNodeRender {
@@ -2377,6 +2393,20 @@ impl PluginFenceBinding {
     }
 }
 
+pub(crate) struct PluginNodeBinding {
+    pub(crate) plugin_name: String,
+    pub(crate) failure_mode: PluginFailureMode,
+    render: PluginBlockNodeRender,
+}
+impl PluginNodeBinding {
+    pub(crate) fn render(
+        &self,
+        input: &PluginBlockNodeInput,
+    ) -> Result<Vec<PluginBlock>, MarkdownConversionError> {
+        self.render.call(input)
+    }
+}
+
 /// Registered plugins for one conversion.
 ///
 /// `create` returns `None` when the host passed no plugins. Setup runs once.
@@ -2384,6 +2414,7 @@ impl PluginFenceBinding {
 pub(crate) struct PluginRuntime {
     transforms: Vec<PluginAstTransform>,
     fences: BTreeMap<String, PluginFenceBinding>,
+    nodes: BTreeMap<String, PluginNodeBinding>,
 }
 
 impl PluginRuntime {
@@ -2408,6 +2439,7 @@ impl PluginRuntime {
         });
         let mut transforms = Vec::new();
         let mut fences = BTreeMap::new();
+        let mut nodes = BTreeMap::new();
         for index in order {
             let plugin = &plugins[index];
             if let Some(setup) = &plugin.setup {
@@ -2415,6 +2447,19 @@ impl PluginRuntime {
             }
             if let Some(transform) = &plugin.transform_ast {
                 transforms.push(transform.clone());
+            }
+            for handler in plugin.block_nodes.as_deref().unwrap_or_default() {
+                for name in &handler.node_types {
+                    nodes
+                        .entry(name.trim().to_string())
+                        .or_insert_with(|| PluginNodeBinding {
+                            plugin_name: plugin.name.clone(),
+                            failure_mode: handler
+                                .failure_mode
+                                .unwrap_or(PluginFailureMode::Fallback),
+                            render: handler.render.clone(),
+                        });
+                }
             }
             let Some(handlers) = plugin.fenced_blocks.as_ref() else {
                 continue;
@@ -2433,13 +2478,21 @@ impl PluginRuntime {
                 }
             }
         }
-        Ok(Some(Self { transforms, fences }))
+        Ok(Some(Self {
+            transforms,
+            fences,
+            nodes,
+        }))
     }
 
-    pub(crate) fn transform(&self) {
+    pub(crate) fn transform(&self, document: &mut crate::model::Document) {
         for transform in &self.transforms {
-            transform.call();
+            transform.call(document);
         }
+    }
+
+    pub(crate) fn node(&self, name: &str) -> Option<&PluginNodeBinding> {
+        self.nodes.get(name)
     }
 
     pub(crate) fn fence(&self, language: &str) -> Option<&PluginFenceBinding> {

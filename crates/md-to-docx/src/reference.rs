@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -15,6 +16,14 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::error::MarkdownConversionError;
+
+// Each fixed expression has one cache. Template contents cannot create entries.
+macro_rules! cached_regex {
+    ($pattern:literal) => {{
+        static REGEX: OnceLock<Regex> = OnceLock::new();
+        REGEX.get_or_init(|| Regex::new($pattern).expect("constant reference XML regex"))
+    }};
+}
 
 const MAX_COMPRESSED_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
@@ -199,10 +208,22 @@ pub fn apply_reference(
     template: &[u8],
     generated: &[u8],
 ) -> Result<Vec<u8>, MarkdownConversionError> {
+    apply_reference_with_options(template, generated, None)
+}
+
+pub(crate) fn apply_reference_with_options(
+    template: &[u8],
+    generated: &[u8],
+    mode: Option<&crate::options::ReferenceDocxModeOptions>,
+) -> Result<Vec<u8>, MarkdownConversionError> {
     ensure_not_aborted(false)?;
     let reference = load_reference(template)?;
     ensure_not_aborted(false)?;
-    apply_presentation(template, generated, &reference)
+    let preserve = (
+        mode.is_none_or(|mode| mode.preserve_page_layout()),
+        mode.is_none_or(|mode| mode.preserve_headers_and_footers()),
+    );
+    apply_presentation(template, generated, &reference, preserve)
 }
 
 fn ensure_not_aborted(aborted: bool) -> Result<(), MarkdownConversionError> {
@@ -573,6 +594,7 @@ fn apply_presentation(
     template: &[u8],
     generated: &[u8],
     reference: &LoadedReference,
+    preserve: (bool, bool),
 ) -> Result<Vec<u8>, MarkdownConversionError> {
     let mut files = read_generated_files(generated)?;
     let mut document_xml = xml_from_files(&files, "word/document.xml")?;
@@ -631,8 +653,7 @@ fn apply_presentation(
         &relationships_xml,
         &content_types_xml,
         reference,
-        true,
-        true,
+        preserve,
     )?;
     document_xml = section.document_xml;
     relationships_xml = section.relationships_xml;
@@ -708,8 +729,8 @@ fn write_zip(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, MarkdownConve
 }
 
 fn parse_styles(styles_xml: &str) -> Result<Vec<ReferenceStyle>, MarkdownConversionError> {
-    let pattern = Regex::new(r"(?s)<w:style\b.*?</w:style>").expect("style pattern");
-    let name_pattern = Regex::new(r"<w:name\b[^>]*/?\s*>").expect("style name");
+    let pattern = cached_regex!(r"(?s)<w:style\b.*?</w:style>");
+    let name_pattern = cached_regex!(r"<w:name\b[^>]*/?\s*>");
     let mut styles = Vec::new();
     for found in pattern.find_iter(styles_xml) {
         let xml = found.as_str();
@@ -756,18 +777,7 @@ fn resolve_style_map(
     let mut resolved = BTreeMap::new();
     for candidate in AUTO_STYLE_CANDIDATES {
         let selector = explicit.iter().find(|item| item.0 == candidate.role);
-        let style_id = resolve_role(
-            styles,
-            candidate.role,
-            candidate.ids,
-            candidate.names,
-            selector.map(|item| item.1),
-            selector.map(|item| item.2),
-            selector.is_some_and(|item| item.3),
-            selector.is_some(),
-            missing_throw,
-            duplicate_throw,
-        )?;
+        let style_id = resolve_role(styles, candidate, selector, missing_throw, duplicate_throw)?;
         if let Some(style_id) = style_id {
             resolved.insert(candidate.role.to_string(), style_id);
         }
@@ -777,16 +787,18 @@ fn resolve_style_map(
 
 fn resolve_role(
     styles: &[ReferenceStyle],
-    role: &str,
-    ids: &[&str],
-    names: &[&str],
-    explicit_id: Option<Option<&str>>,
-    explicit_name: Option<Option<&str>>,
-    explicit_skip: bool,
-    explicit: bool,
+    candidate: &AutoStyleCandidates,
+    selector: Option<&(&str, Option<&str>, Option<&str>, bool)>,
     missing_throw: bool,
     duplicate_throw: bool,
 ) -> Result<Option<String>, MarkdownConversionError> {
+    let role = candidate.role;
+    let ids = candidate.ids;
+    let names = candidate.names;
+    let explicit = selector.is_some();
+    let explicit_id = selector.map(|item| item.1);
+    let explicit_name = selector.map(|item| item.2);
+    let explicit_skip = selector.is_some_and(|item| item.3);
     if explicit_skip {
         return Ok(None);
     }
@@ -910,13 +922,14 @@ fn remap_reference_numbering(
     );
     let generated_num_ids =
         ids_from_xml(generated_numbering_xml, r#"<w:num\b[^>]*w:numId="(\d+)""#);
-    let mut next_abstract_id = generated_abstract_ids.iter().copied().max().unwrap_or(0) + 1;
+    let next_abstract_id = generated_abstract_ids.iter().copied().max().unwrap_or(0) + 1;
     let mut next_num_id = generated_num_ids.iter().copied().max().unwrap_or(0) + 1;
     let mut abstract_id_map = BTreeMap::new();
-    let abstract_pattern =
-        Regex::new(r"(?s)<w:abstractNum\b.*?</w:abstractNum>").expect("abstract");
+    let abstract_pattern = cached_regex!(r"(?s)<w:abstractNum\b.*?</w:abstractNum>");
     let mut abstract_definitions = Vec::new();
-    for found in abstract_pattern.find_iter(reference_numbering_xml) {
+    for (mapped, found) in
+        (next_abstract_id..).zip(abstract_pattern.find_iter(reference_numbering_xml))
+    {
         let definition = found.as_str();
         let open = open_tag(definition);
         let id = get_attribute(open, "w:abstractNumId")
@@ -929,8 +942,6 @@ fn remap_reference_numbering(
                     &[("entry", "word/numbering.xml")],
                 )
             })?;
-        let mapped = next_abstract_id;
-        next_abstract_id += 1;
         abstract_id_map.insert(id, mapped);
         abstract_definitions.push(replace_attribute(
             definition,
@@ -939,8 +950,8 @@ fn remap_reference_numbering(
         ));
     }
 
-    let num_pattern = Regex::new(r"(?s)<w:num\b.*?</w:num>").expect("num");
-    let abstract_ref_pattern = Regex::new(r"<w:abstractNumId\b[^>]*/?\s*>").expect("abstract ref");
+    let num_pattern = cached_regex!(r"(?s)<w:num\b.*?</w:num>");
+    let abstract_ref_pattern = cached_regex!(r"<w:abstractNumId\b[^>]*/?\s*>");
     let mut num_id_map = BTreeMap::new();
     let mut num_definitions = Vec::new();
     for found in num_pattern.find_iter(reference_numbering_xml) {
@@ -1004,7 +1015,7 @@ fn invalid_numbering() -> MarkdownConversionError {
 }
 
 fn ids_from_xml(xml: &str, pattern: &str) -> Vec<i64> {
-    let pattern = Regex::new(pattern).expect("id pattern");
+    let pattern = tag_regex(pattern);
     pattern
         .captures_iter(xml)
         .filter_map(|caps| parse_safe_int(&caps[1]))
@@ -1028,7 +1039,7 @@ fn rewrite_style_numbering(styles_xml: &str, num_id_map: &BTreeMap<i64, i64>) ->
     if num_id_map.is_empty() {
         return styles_xml.to_string();
     }
-    let pattern = Regex::new(r"<w:numId\b[^>]*/?\s*>").expect("numId");
+    let pattern = cached_regex!(r"<w:numId\b[^>]*/?\s*>");
     pattern
         .replace_all(styles_xml, |caps: &regex::Captures| {
             let element = &caps[0];
@@ -1055,7 +1066,7 @@ fn merge_styles(
         .iter()
         .map(|style| style.id.clone())
         .collect::<BTreeSet<_>>();
-    let pattern = Regex::new(r"(?s)<w:style\b.*?</w:style>").expect("style pattern");
+    let pattern = cached_regex!(r"(?s)<w:style\b.*?</w:style>");
     let mut appended = String::new();
     for found in pattern.find_iter(generated_styles_xml) {
         let xml = found.as_str();
@@ -1077,7 +1088,7 @@ fn merge_styles(
 }
 
 fn apply_style_map_to_document(document_xml: &str, style_map: &BTreeMap<String, String>) -> String {
-    let paragraphs = Regex::new(r"(?s)<w:p\b.*?</w:p>").expect("paragraph");
+    let paragraphs = cached_regex!(r"(?s)<w:p\b.*?</w:p>");
     let mut rewritten = paragraphs
         .replace_all(document_xml, |caps: &regex::Captures| {
             let paragraph = &caps[0];
@@ -1100,7 +1111,7 @@ fn apply_style_map_to_document(document_xml: &str, style_map: &BTreeMap<String, 
 
 fn paragraph_role(paragraph: &str) -> Option<&'static str> {
     let p_pr = first_capture(paragraph, r"(?s)<w:pPr\b[^>]*>.*?</w:pPr>").unwrap_or("");
-    let style_pattern = Regex::new(r#"<w:pStyle\b[^>]*w:val=["']([^"']+)["']"#).expect("pStyle");
+    let style_pattern = cached_regex!(r#"<w:pStyle\b[^>]*w:val=["']([^"']+)["']"#);
     let style_ids = style_pattern
         .captures_iter(p_pr)
         .map(|caps| caps[1].to_string())
@@ -1151,7 +1162,7 @@ fn replace_run_style(run: &str, style_id: &str) -> String {
 }
 
 fn apply_table_style(table_xml: &str, style_id: &str) -> String {
-    let tables = Regex::new(r"(?s)<w:tbl\b.*?</w:tbl>").expect("table");
+    let tables = cached_regex!(r"(?s)<w:tbl\b.*?</w:tbl>");
     let style_element = format!(r#"<w:tblStyle w:val="{}"/>"#, escape_xml(style_id));
     tables
         .replace_all(table_xml, |caps: &regex::Captures| {
@@ -1167,8 +1178,7 @@ fn replace_container_style(
     style_tag: &str,
     style_element: &str,
 ) -> String {
-    let properties_pattern =
-        Regex::new(&format!(r"(?s)<{properties}\b[^>]*>.*?</{properties}>")).expect("properties");
+    let properties_pattern = tag_regex(&format!(r"(?s)<{properties}\b[^>]*>.*?</{properties}>"));
     if let Some(found) = properties_pattern.find(xml) {
         let mut properties_xml = remove_leaf_tag(found.as_str(), style_tag);
         properties_xml = insert_after_open_tag(&properties_xml, properties, style_element);
@@ -1183,7 +1193,7 @@ fn replace_container_style(
 }
 
 fn strip_paragraph_direct_formatting(paragraph: &str) -> String {
-    let pattern = Regex::new(r"(?s)<w:pPr\b[^>]*>.*?</w:pPr>").expect("pPr");
+    let pattern = cached_regex!(r"(?s)<w:pPr\b[^>]*>.*?</w:pPr>");
     pattern
         .replace(paragraph, |caps: &regex::Captures| {
             let mut rewritten = caps[0].to_string();
@@ -1206,19 +1216,19 @@ fn strip_paragraph_direct_formatting(paragraph: &str) -> String {
 }
 
 fn strip_base_run_formatting(run: &str) -> String {
-    let pattern = Regex::new(r"<w:(?:color|sz|szCs|rFonts|rtl)\b[^>]*/?\s*>").expect("run props");
+    let pattern = cached_regex!(r"<w:(?:color|sz|szCs|rFonts|rtl)\b[^>]*/?\s*>");
     pattern.replace_all(run, "").into_owned()
 }
 
 fn strip_inline_code_direct(run: &str) -> String {
-    let pattern = Regex::new(r"<w:(?:shd|rFonts|color|sz|szCs)\b[^>]*/?\s*>").expect("code props");
+    let pattern = cached_regex!(r"<w:(?:shd|rFonts|color|sz|szCs)\b[^>]*/?\s*>");
     pattern.replace_all(run, "").into_owned()
 }
 
 fn apply_run_styles(paragraph: &str, style_map: &BTreeMap<String, String>) -> String {
     let mut rewritten = paragraph.to_string();
     if let Some(hyperlink_style) = style_map.get("hyperlink") {
-        let links = Regex::new(r"(?s)<w:hyperlink\b.*?</w:hyperlink>").expect("hyperlink");
+        let links = cached_regex!(r"(?s)<w:hyperlink\b.*?</w:hyperlink>");
         let style_id = hyperlink_style.clone();
         rewritten = links
             .replace_all(&rewritten, |caps: &regex::Captures| {
@@ -1261,18 +1271,18 @@ fn apply_run_styles(paragraph: &str, style_map: &BTreeMap<String, String>) -> St
 }
 
 fn map_runs(xml: &str, mut mapper: impl FnMut(&str) -> String) -> String {
-    let runs = Regex::new(r"(?s)<w:r\b.*?</w:r>").expect("run");
+    let runs = cached_regex!(r"(?s)<w:r\b.*?</w:r>");
     runs.replace_all(xml, |caps: &regex::Captures| mapper(&caps[0]))
         .into_owned()
 }
 
 fn mono_font(run: &str) -> bool {
-    let pattern = Regex::new(r"<w:rFonts\b[^>]*(?:Courier|Consolas|monospace)").expect("font");
+    let pattern = cached_regex!(r"<w:rFonts\b[^>]*(?:Courier|Consolas|monospace)");
     pattern.is_match(run)
 }
 
 fn run_style_value(run: &str) -> Option<String> {
-    let pattern = Regex::new(r#"<w:rStyle\b[^>]*w:val=["']([^"']+)["']"#).expect("rStyle");
+    let pattern = cached_regex!(r#"<w:rStyle\b[^>]*w:val=["']([^"']+)["']"#);
     pattern.captures(run).map(|caps| caps[1].to_string())
 }
 
@@ -1287,7 +1297,7 @@ fn parse_relationships(
             &[("entry", entry)],
         ));
     }
-    let pattern = Regex::new(r"<Relationship\b[^>]*/?\s*>").expect("relationship");
+    let pattern = cached_regex!(r"<Relationship\b[^>]*/?\s*>");
     let mut relationships = Vec::new();
     for found in pattern.find_iter(xml) {
         let relation = found.as_str();
@@ -1315,7 +1325,8 @@ fn parse_relationships(
 fn parse_content_types(xml: &str) -> ContentTypes {
     let mut defaults = BTreeMap::new();
     let mut overrides = BTreeMap::new();
-    if let Ok(pattern) = Regex::new(r"<Default\b[^>]*/?\s*>") {
+    {
+        let pattern = cached_regex!(r"<Default\b[^>]*/?\s*>");
         for found in pattern.find_iter(xml) {
             let element = found.as_str();
             let extension = get_attribute(element, "Extension");
@@ -1325,7 +1336,8 @@ fn parse_content_types(xml: &str) -> ContentTypes {
             }
         }
     }
-    if let Ok(pattern) = Regex::new(r"<Override\b[^>]*/?\s*>") {
+    {
+        let pattern = cached_regex!(r"<Override\b[^>]*/?\s*>");
         for found in pattern.find_iter(xml) {
             let element = found.as_str();
             let part_name = get_attribute(element, "PartName");
@@ -1430,16 +1442,17 @@ fn add_default_content_types(output_xml: &str, reference_xml: &str) -> String {
     let reference = parse_content_types(reference_xml);
     let mut rewritten = output_xml.to_string();
     for (extension, content_type) in reference.defaults {
-        if !output.defaults.contains_key(&extension) {
+        if let std::collections::btree_map::Entry::Vacant(entry) = output.defaults.entry(extension)
+        {
             rewritten = rewritten.replace(
                 "</Types>",
                 &format!(
                     r#"<Default Extension="{}" ContentType="{}"/></Types>"#,
-                    escape_xml(&extension),
+                    escape_xml(entry.key()),
                     escape_xml(&content_type)
                 ),
             );
-            output.defaults.insert(extension, content_type);
+            entry.insert(content_type);
         }
     }
     rewritten
@@ -1609,9 +1622,9 @@ fn adopt_section_presentation(
     relationships_xml: &str,
     content_types_xml: &str,
     reference: &LoadedReference,
-    preserve_page_layout: bool,
-    preserve_headers_and_footers: bool,
+    preserve: (bool, bool),
 ) -> Result<SectionAdoption, MarkdownConversionError> {
+    let (preserve_page_layout, preserve_headers_and_footers) = preserve;
     let Some(section) = reference.final_section_properties.as_deref() else {
         return Ok(SectionAdoption {
             document_xml: document_xml.to_string(),
@@ -1629,7 +1642,7 @@ fn adopt_section_presentation(
     let mut imported = BTreeMap::new();
     let mut rewritten_references = String::new();
     if preserve_headers_and_footers {
-        let pattern = Regex::new(r"<w:(headerReference|footerReference)\b[^>]*/?\s*>").expect("hf");
+        let pattern = cached_regex!(r"<w:(headerReference|footerReference)\b[^>]*/?\s*>");
         for found in pattern.captures_iter(section) {
             let kind = found.get(1).map(|item| item.as_str()).unwrap_or("");
             let element = found.get(0).map(|item| item.as_str()).unwrap_or("");
@@ -1702,7 +1715,7 @@ fn adopt_section_presentation(
     } else {
         String::new()
     };
-    let sections = Regex::new(r"(?s)<w:sectPr\b.*?</w:sectPr>").expect("sectPr");
+    let sections = cached_regex!(r"(?s)<w:sectPr\b.*?</w:sectPr>");
     let document_xml = sections
         .replace_all(document_xml, |caps: &regex::Captures| {
             let mut rewritten = caps[0].to_string();
@@ -1710,8 +1723,7 @@ fn adopt_section_presentation(
                 rewritten = remove_presentation_tags(&rewritten);
             }
             if preserve_headers_and_footers {
-                let refs = Regex::new(r"<w:(?:headerReference|footerReference)\b[^>]*/?\s*>")
-                    .expect("refs");
+                let refs = cached_regex!(r"<w:(?:headerReference|footerReference)\b[^>]*/?\s*>");
                 rewritten = refs.replace_all(&rewritten, "").into_owned();
             }
             let additions = format!("{rewritten_references}{layout}");
@@ -1728,8 +1740,7 @@ fn adopt_section_presentation(
 fn presentation_tags(section_properties: &str) -> String {
     let mut output = String::new();
     for name in PRESENTATION_TAGS {
-        let pattern = Regex::new(&format!(r"(?s)<w:{name}\b(?:[^>]*/>|[^>]*>.*?</w:{name}>)"))
-            .expect("presentation tag");
+        let pattern = tag_regex(&format!(r"(?s)<w:{name}\b(?:[^>]*/>|[^>]*>.*?</w:{name}>)"));
         if let Some(found) = pattern.find(section_properties) {
             output.push_str(found.as_str());
         }
@@ -1835,8 +1846,27 @@ fn import_singleton_part(
     })
 }
 
+// The callers construct these expressions only from internal XML tag names.
+// Keep the cache bounded even if more patterns are added later.
+fn tag_regex(pattern: &str) -> Arc<Regex> {
+    const MAX_PATTERNS: usize = 128;
+    static CACHE: OnceLock<Mutex<BTreeMap<String, Arc<Regex>>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .expect("reference regex cache lock");
+    if let Some(regex) = cache.get(pattern) {
+        return Arc::clone(regex);
+    }
+    let regex = Arc::new(Regex::new(pattern).expect("internal reference XML regex"));
+    if cache.len() < MAX_PATTERNS {
+        cache.insert(pattern.to_string(), Arc::clone(&regex));
+    }
+    regex
+}
+
 fn last_element(xml: &str, tag: &str) -> Option<String> {
-    let pattern = Regex::new(&format!(r"(?s)<{tag}\b.*?</{tag}>")).expect("element");
+    let pattern = tag_regex(&format!(r"(?s)<{tag}\b.*?</{tag}>"));
     pattern
         .find_iter(xml)
         .last()
@@ -1844,10 +1874,7 @@ fn last_element(xml: &str, tag: &str) -> Option<String> {
 }
 
 fn first_capture<'a>(xml: &'a str, pattern: &str) -> Option<&'a str> {
-    Regex::new(pattern)
-        .expect("capture")
-        .find(xml)
-        .map(|found| found.as_str())
+    tag_regex(pattern).find(xml).map(|found| found.as_str())
 }
 
 fn open_tag(xml: &str) -> &str {
@@ -1879,18 +1906,17 @@ fn has_prefixed_tag(xml: &str, needle_body: &str) -> bool {
 }
 
 fn remove_word_element(xml: &str, tag: &str) -> String {
-    let pattern =
-        Regex::new(&format!(r"(?s)<w:{tag}\b(?:[^>]*/>|[^>]*>.*?</w:{tag}>)")).expect("remove tag");
+    let pattern = tag_regex(&format!(r"(?s)<w:{tag}\b(?:[^>]*/>|[^>]*>.*?</w:{tag}>)"));
     pattern.replace_all(xml, "").into_owned()
 }
 
 fn remove_leaf_tag(xml: &str, tag: &str) -> String {
-    let pattern = Regex::new(&format!(r"<{tag}\b[^>]*/?\s*>")).expect("leaf");
+    let pattern = tag_regex(&format!(r"<{tag}\b[^>]*/?\s*>"));
     pattern.replace_all(xml, "").into_owned()
 }
 
 fn insert_after_open_tag(xml: &str, tag: &str, insertion: &str) -> String {
-    let pattern = Regex::new(&format!(r"^<{tag}\b[^>]*>")).expect("open tag");
+    let pattern = tag_regex(&format!(r"^<{tag}\b[^>]*>"));
     if let Some(found) = pattern.find(xml) {
         splice(xml, found.end(), found.end(), insertion)
     } else {
@@ -2011,6 +2037,32 @@ fn escape_xml(value: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cached_reference_rewrites_preserve_text_and_numbering_links() {
+        let source = r#"<w:document><w:p><w:pPr><w:spacing w:after="120"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="123456"/></w:rPr><w:t>Keep &amp; bold</w:t></w:r></w:p></w:document>"#;
+        let map = BTreeMap::from([
+            ("normal".to_string(), "CorpBody".to_string()),
+            ("strong".to_string(), "CorpStrong".to_string()),
+        ]);
+        let expected = r#"<w:document><w:p><w:pPr><w:pStyle w:val="CorpBody"/></w:pPr><w:r><w:rPr><w:rStyle w:val="CorpStrong"/><w:b/></w:rPr><w:t>Keep &amp; bold</w:t></w:r></w:p></w:document>"#;
+        let generated = r#"<w:numbering><w:abstractNum w:abstractNumId="4"></w:abstractNum><w:num w:numId="8"><w:abstractNumId w:val="4"/></w:num></w:numbering>"#;
+        let reference = r#"<w:numbering><w:abstractNum w:abstractNumId="1"></w:abstractNum><w:abstractNum w:abstractNumId="2"></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num></w:numbering>"#;
+        for _ in 0..2 {
+            assert_eq!(apply_style_map_to_document(source, &map), expected);
+            let remap = remap_reference_numbering(generated, Some(reference)).unwrap();
+            assert_eq!(remap.num_id_map, BTreeMap::from([(1, 9), (2, 10)]));
+            assert!(remap
+                .xml
+                .contains(r#"<w:num w:numId="9"><w:abstractNumId w:val="5"/></w:num>"#));
+            assert!(remap
+                .xml
+                .contains(r#"<w:num w:numId="10"><w:abstractNumId w:val="6"/></w:num>"#));
+            assert!(remap
+                .xml
+                .contains(r#"<w:num w:numId="8"><w:abstractNumId w:val="4"/></w:num>"#));
+        }
+    }
+
     fn code_of(error: &MarkdownConversionError) -> Option<&str> {
         error
             .context()
@@ -2122,13 +2174,12 @@ mod tests {
         ];
         let duplicate = resolve_role(
             &styles,
-            "heading1",
-            &["Heading1"],
-            &["Heading 1"],
-            Some(None),
-            Some(Some("Executive Heading")),
-            false,
-            true,
+            &AutoStyleCandidates {
+                role: "heading1",
+                ids: &["Heading1"],
+                names: &["Heading 1"],
+            },
+            Some(&("heading1", None, Some("Executive Heading"), false)),
             false,
             true,
         )
@@ -2137,13 +2188,12 @@ mod tests {
 
         let missing = resolve_role(
             &styles,
-            "heading1",
-            &["Heading1"],
-            &["Heading 1"],
-            Some(None),
-            Some(Some("Missing Heading")),
-            false,
-            true,
+            &AutoStyleCandidates {
+                role: "heading1",
+                ids: &["Heading1"],
+                names: &["Heading 1"],
+            },
+            Some(&("heading1", None, Some("Missing Heading"), false)),
             true,
             true,
         )
@@ -2152,13 +2202,12 @@ mod tests {
 
         let mismatch = resolve_role(
             &styles,
-            "heading1",
-            &["Heading1"],
-            &["Heading 1"],
-            Some(Some("Heading1")),
-            Some(None),
-            false,
-            true,
+            &AutoStyleCandidates {
+                role: "heading1",
+                ids: &["Heading1"],
+                names: &["Heading 1"],
+            },
+            Some(&("heading1", Some("Heading1"), None, false)),
             true,
             true,
         )
