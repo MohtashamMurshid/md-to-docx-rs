@@ -1,0 +1,294 @@
+    margin_bottom: u32,
+    margin_left: u32,
+    margin_header: u32,
+    margin_footer: u32,
+    margin_gutter: u32,
+    numbering: Option<ResolvedPageNumbering>,
+    title_page: Option<bool>,
+    break_type: Option<SectionBreak>,
+    last: bool,
+}
+
+struct QuoteCtx {
+    level: u32,
+    callout: Option<CalloutKind>,
+    /// Direct paragraphs of a plain quote are italic. CalloutKind paragraphs are not.
+    italic_paragraphs: bool,
+}
+
+struct Look {
+    size: Option<u32>,
+    force_bold: bool,
+    force_italic: bool,
+    color: Option<&'static str>,
+}
+
+impl Look {
+    fn body() -> Self {
+        Self {
+            size: None,
+            force_bold: false,
+            force_italic: false,
+            color: None,
+        }
+    }
+
+    fn sized(size: u32) -> Self {
+        Self {
+            size: Some(size),
+            force_bold: false,
+            force_italic: false,
+            color: None,
+        }
+    }
+}
+
+struct Xml {
+    writer: Writer<Cursor<Vec<u8>>>,
+}
+
+impl Xml {
+    fn new() -> Result<Self, MarkdownConversionError> {
+        let mut writer = Writer::new(Cursor::new(Vec::new()));
+        writer
+            .write_event(Event::Decl(BytesDecl::new(
+                "1.0",
+                Some("UTF-8"),
+                Some("yes"),
+            )))
+            .map_err(conv)?;
+        Ok(Self { writer })
+    }
+
+    fn fragment() -> Self {
+        Self {
+            writer: Writer::new(Cursor::new(Vec::new())),
+        }
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.writer.into_inner().into_inner()
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        let cursor = self.writer.get_mut();
+        cursor.get_mut().extend_from_slice(bytes);
+        let end = u64::try_from(cursor.get_ref().len()).unwrap_or(u64::MAX);
+        cursor.set_position(end);
+    }
+
+    fn start(&mut self, name: &str, attrs: &[(&str, &str)]) -> Result<(), MarkdownConversionError> {
+        let mut elem = BytesStart::new(name);
+        for (key, value) in attrs {
+            elem.push_attribute((*key, *value));
+        }
+        self.writer.write_event(Event::Start(elem)).map_err(conv)
+    }
+
+    fn end(&mut self, name: &str) -> Result<(), MarkdownConversionError> {
+        self.writer
+            .write_event(Event::End(BytesEnd::new(name)))
+            .map_err(conv)
+    }
+
+    fn empty(&mut self, name: &str, attrs: &[(&str, &str)]) -> Result<(), MarkdownConversionError> {
+        let mut elem = BytesStart::new(name);
+        for (key, value) in attrs {
+            elem.push_attribute((*key, *value));
+        }
+        self.writer.write_event(Event::Empty(elem)).map_err(conv)
+    }
+
+    fn text(&mut self, raw: &str) -> Result<(), MarkdownConversionError> {
+        let escaped = escape(raw);
+        self.writer
+            .write_event(Event::Text(BytesText::from_escaped(escaped)))
+            .map_err(conv)
+    }
+
+    /// Element text. Quotes stay as characters, matching the metadata serializer.
+    fn plain_text(&mut self, raw: &str) -> Result<(), MarkdownConversionError> {
+        let escaped = partial_escape(raw);
+        self.writer
+            .write_event(Event::Text(BytesText::from_escaped(escaped)))
+            .map_err(conv)
+    }
+
+    fn text_elem(&mut self, raw: &str) -> Result<(), MarkdownConversionError> {
+        self.start("w:t", &[("xml:space", "preserve")])?;
+        if !raw.is_empty() {
+            self.text(raw)?;
+        }
+        self.end("w:t")
+    }
+}
+
+fn conv(err: impl std::fmt::Display) -> MarkdownConversionError {
+    MarkdownConversionError::new(err.to_string())
+}
+
+fn alignment_name(align: Alignment) -> &'static str {
+    match align {
+        Alignment::Left => "left",
+        Alignment::Center => "center",
+        Alignment::Right => "right",
+        Alignment::Justified => "both",
+    }
+}
+
+fn section_break_name(kind: SectionBreak) -> &'static str {
+    match kind {
+        SectionBreak::NextPage => "nextPage",
+        SectionBreak::NextColumn => "nextColumn",
+        SectionBreak::Continuous => "continuous",
+        SectionBreak::EvenPage => "evenPage",
+        SectionBreak::OddPage => "oddPage",
+    }
+}
+
+fn page_format_name(format: PageNumberFormat) -> &'static str {
+    match format {
+        PageNumberFormat::Decimal => "decimal",
+        PageNumberFormat::UpperRoman => "upperRoman",
+        PageNumberFormat::LowerRoman => "lowerRoman",
+        PageNumberFormat::UpperLetter => "upperLetter",
+        PageNumberFormat::LowerLetter => "lowerLetter",
+    }
+}
+
+fn page_separator_name(separator: PageNumberSeparator) -> &'static str {
+    match separator {
+        PageNumberSeparator::Hyphen => "hyphen",
+        PageNumberSeparator::Period => "period",
+        PageNumberSeparator::Colon => "colon",
+        PageNumberSeparator::EmDash => "emDash",
+        PageNumberSeparator::EnDash => "endash",
+    }
+}
+
+fn story_wants_number_paragraph(
+    header: bool,
+    body: &HeaderFooterBody,
+    fallback_display: PageNumberDisplay,
+) -> bool {
+    let rich = !body.blocks.is_empty();
+    let text = body.text.as_deref().unwrap_or("");
+    if header {
+        let numbered = matches!(
+            body.page_number_display,
+            Some(display) if display != PageNumberDisplay::None
+        );
+        return !rich || !text.is_empty() || numbered;
+    }
+    let display = body.page_number_display.unwrap_or(fallback_display);
+    !rich || !text.is_empty() || display != PageNumberDisplay::None
+}
+
+fn splice_sect_pr(body: &[u8], sect: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(body).ok()?;
+    let trimmed = text.trim_end();
+    if !trimmed.ends_with("</w:p>") {
+        return None;
+    }
+    let p_start = trimmed.rfind("<w:p>")?;
+    let ppr_rel = trimmed[p_start..].find("</w:pPr>")?;
+    let insert_at = p_start + ppr_rel;
+    let mut merged = Vec::with_capacity(body.len() + sect.len());
+    merged.extend_from_slice(&body[..insert_at]);
+    merged.extend_from_slice(sect);
+    merged.extend_from_slice(&body[insert_at..]);
+    Some(merged)
+}
+
+fn prepared_body_blocks(doc: &PreparedDocument) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    for section in &doc.sections {
+        for child in &section.children {
+            if let SectionBlock::Body(block) = child {
+                blocks.push(block.clone());
+            }
+        }
+    }
+    blocks
+}
+
+fn plant_prepared_images(doc: &mut PreparedDocument, markdown: &str, options: &ConvertOptions) {
+    let resolved = crate::options::resolve_sections(markdown, options);
+    for (section, input) in doc.sections.iter_mut().zip(resolved) {
+        plant_section_footnotes(section);
+        plant_slot(
+            section.headers.default.as_mut(),
+            input.headers.default.as_ref(),
+        );
+        plant_slot(section.headers.first.as_mut(), input.headers.first.as_ref());
+        plant_slot(section.headers.even.as_mut(), input.headers.even.as_ref());
+        plant_slot(
+            section.footers.default.as_mut(),
+            input.footers.default.as_ref(),
+        );
+        plant_slot(section.footers.first.as_mut(), input.footers.first.as_ref());
+        plant_slot(section.footers.even.as_mut(), input.footers.even.as_ref());
+    }
+    let _ = markdown;
+}
+
+fn plant_slot(
+    slot: Option<&mut HeaderFooterBody>,
+    input: Option<&crate::options::ResolvedSlotInput>,
+) {
+    let Some(body) = slot else {
+        return;
+    };
+    let Some(markdown) = input.and_then(|slot| slot.content.markdown.as_deref()) else {
+        return;
+    };
+    plant_markdown_images(&mut body.blocks, markdown);
+}
+
+fn plant_section_footnotes(section: &mut PreparedSection) {
+    let mut children = Vec::new();
+    for block in &section.children {
+        if let SectionBlock::Body(block) = block {
+            children.push(block.clone());
+        }
+    }
+    let mut document = Document { children };
+    plant_footnote_images(&mut document, &section.markdown);
+    let mut planted = document.children.into_iter();
+    for block in &mut section.children {
+        if let SectionBlock::Body(body) = block {
+            if let Some(next) = planted.next() {
+                *body = next;
+            }
+        }
+    }
+}
+
+fn plant_markdown_images(blocks: &mut [Block], markdown: &str) {
+    let urls = markdown_image_urls(markdown);
+    if !urls.is_empty() {
+        let mut urls = urls.into_iter();
+        insert_blank_images(blocks, &mut urls);
+    }
+    stamp_image_labels(blocks, markdown);
+}
+
+fn insert_blank_images(blocks: &mut [Block], urls: &mut impl Iterator<Item = String>) {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph) => {
+                let blank = paragraph
+                    .children
+                    .iter()
+                    .all(|run| run.text.is_empty() && run.footnote.is_none() && run.link.is_none());
+                if blank {
+                    if let Some(url) = urls.next() {
+                        paragraph.children = vec![Inline {
+                            text: format!("{IMAGE_MARK}{url}"),
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                            strike: false,
+                            code: false,
+                            link: None,
+                            footnote: None,
