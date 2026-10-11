@@ -1,0 +1,295 @@
+                            math_omml: None,
+                            cross_ref: None,
+                        }];
+                    }
+                }
+            }
+            Block::List(list) => {
+                for item in &mut list.children {
+                    insert_blank_images(&mut item.children, urls);
+                }
+            }
+            Block::Blockquote(quote) => insert_blank_images(&mut quote.children, urls),
+            Block::Heading(_)
+            | Block::CodeBlock(_)
+            | Block::Table(_)
+            | Block::ThematicBreak
+            | Block::PageBreak
+            | Block::Comment(_)
+            | Block::Caption(_)
+            | Block::Image(_)
+            | Block::DisplayMath { .. }
+            | Block::ChartImage { .. }
+            | Block::FootnoteDefinition { .. } => {}
+        }
+    }
+}
+
+fn markdown_image_urls(markdown: &str) -> Vec<String> {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_GFM);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_FOOTNOTES);
+    let mut urls = Vec::new();
+    let mut footnote = 0_u32;
+    for event in Parser::new_ext(markdown, options) {
+        match event {
+            MdEvent::Start(Tag::FootnoteDefinition(_)) => footnote = footnote.saturating_add(1),
+            MdEvent::End(TagEnd::FootnoteDefinition) if footnote > 0 => {
+                footnote = footnote.saturating_sub(1);
+            }
+            MdEvent::Start(Tag::Image { dest_url, .. }) if footnote == 0 => {
+                urls.push(dest_url.to_string());
+            }
+            _ => {}
+        }
+    }
+    urls
+}
+
+impl State {
+    fn write_document(&mut self, doc: &Document) -> Result<Vec<u8>, MarkdownConversionError> {
+        self.headings.clear();
+        self.index_captions(&doc.children);
+        collect_headings(&doc.children, &mut self.headings);
+        let has_footnotes = !self.footnote_order.is_empty();
+        self.attach_default_footer()?;
+        let mut xml = Xml::new()?;
+        xml.start(
+            "w:document",
+            &[("xmlns:w", W_NS), ("xmlns:r", R_NS), ("xmlns:m", MATH_NS)],
+        )?;
+        xml.start("w:body", &[])?;
+        if doc.children.is_empty() {
+            self.write_body_paragraph(&mut xml, &[], Look::body())?;
+        } else {
+            let mut previous_code = false;
+            for block in &doc.children {
+                if matches!(block, Block::FootnoteDefinition { .. }) {
+                    self.write_block(&mut xml, block, None)?;
+                    continue;
+                }
+                let code = matches!(block, Block::CodeBlock(_));
+                if code && previous_code {
+                    write_code_spacer(&mut xml)?;
+                }
+                self.write_block(&mut xml, block, None)?;
+                previous_code = code;
+            }
+        }
+        self.assign_story_ids(has_footnotes);
+        self.write_section(&mut xml)?;
+        xml.end("w:body")?;
+        xml.end("w:document")?;
+        Ok(xml.finish())
+    }
+
+    fn write_prepared(
+        &mut self,
+        doc: &PreparedDocument,
+    ) -> Result<Vec<u8>, MarkdownConversionError> {
+        self.index_heading_anchors(doc);
+        self.index_prepared_captions(doc);
+        let mut drawn = Vec::new();
+        let count = doc.sections.len();
+        for (index, section) in doc.sections.iter().enumerate() {
+            self.content_width = section.page.content_width.max(1);
+            self.active_style = Some(section.style.clone());
+            self.paragraph_align_override = None;
+            let rel_start = self.story_rels.len();
+            self.attach_section_stories(section)?;
+            let rel_end = self.story_rels.len();
+            let mut xml = Xml::fragment();
+            let mut wrote = false;
+            let mut previous_code = false;
+            for child in &section.children {
+                match child {
+                    SectionBlock::Body(Block::FootnoteDefinition { .. }) => {}
+                    SectionBlock::Body(block) => {
+                        let code = matches!(block, Block::CodeBlock(_));
+                        if code && previous_code {
+                            write_code_spacer(&mut xml)?;
+                        }
+                        self.write_block(&mut xml, block, None)?;
+                        previous_code = code;
+                        wrote = true;
+                    }
+                    SectionBlock::TableOfContents(toc) => {
+                        if self.write_prepared_toc(&mut xml, toc)? {
+                            wrote = true;
+                            previous_code = false;
+                        }
+                    }
+                }
+            }
+            if !wrote {
+                let look = self.body_look();
+                self.write_body_paragraph(&mut xml, &[], look)?;
+            }
+            drawn.push(DrawnSection {
+                body: xml.finish(),
+                rel_start,
+                rel_end,
+                page_width: section.page.width,
+                page_height: section.page.height,
+                orientation: section.page.orientation,
+                margin_top: section.page.margin_top,
+                margin_right: section.page.margin_right,
+                margin_bottom: section.page.margin_bottom,
+                margin_left: section.page.margin_left,
+                margin_header: section.page.margin_header.unwrap_or(708),
+                margin_footer: section.page.margin_footer.unwrap_or(708),
+                margin_gutter: section.page.margin_gutter.unwrap_or(0),
+                numbering: section.page_numbering.clone(),
+                title_page: section.title_page,
+                break_type: section.break_type,
+                last: index + 1 == count,
+            });
+        }
+        self.active_style = None;
+        self.paragraph_align_override = None;
+        let has_footnotes = !self.footnote_order.is_empty();
+        self.assign_story_ids(has_footnotes);
+        let mut xml = Xml::new()?;
+        xml.start(
+            "w:document",
+            &[("xmlns:w", W_NS), ("xmlns:r", R_NS), ("xmlns:m", MATH_NS)],
+        )?;
+        xml.start("w:body", &[])?;
+        if drawn.is_empty() {
+            self.write_body_paragraph(&mut xml, &[], Look::body())?;
+            self.write_section(&mut xml)?;
+        } else {
+            for section in &drawn {
+                let sect = self.section_properties(section)?;
+                if section.last {
+                    xml.push_bytes(&section.body);
+                    xml.push_bytes(&sect);
+                } else if let Some(merged) = splice_sect_pr(&section.body, &sect) {
+                    xml.push_bytes(&merged);
+                } else {
+                    xml.push_bytes(&section.body);
+                    xml.start("w:p", &[])?;
+                    xml.start("w:pPr", &[])?;
+                    xml.push_bytes(&sect);
+                    xml.end("w:pPr")?;
+                    xml.end("w:p")?;
+                }
+            }
+        }
+        xml.end("w:body")?;
+        xml.end("w:document")?;
+        Ok(xml.finish())
+    }
+
+    /// Same registration order as `parse::prepare`: every section body, then
+    /// each section's header slots, then its footer slots.
+    fn index_heading_anchors(&mut self, doc: &PreparedDocument) {
+        for section in &doc.sections {
+            for child in &section.children {
+                if let SectionBlock::Body(block) = child {
+                    self.remember_block_anchor(block);
+                }
+            }
+        }
+        for section in &doc.sections {
+            self.remember_story_anchors(&section.headers);
+            self.remember_story_anchors(&section.footers);
+        }
+    }
+
+    fn remember_story_anchors(&mut self, group: &ResolvedHeaderFooter) {
+        for slot in [
+            group.default.as_ref(),
+            group.first.as_ref(),
+            group.even.as_ref(),
+        ] {
+            let Some(slot) = slot else {
+                continue;
+            };
+            for block in &slot.blocks {
+                self.remember_block_anchor(block);
+            }
+        }
+    }
+
+    fn remember_block_anchor(&mut self, block: &Block) {
+        match block {
+            Block::Heading(heading) => {
+                self.anchors
+                    .remember(&inline_text(&heading.children), &heading.bookmark);
+            }
+            Block::List(list) => {
+                for item in &list.children {
+                    for child in &item.children {
+                        self.remember_block_anchor(child);
+                    }
+                }
+            }
+            Block::Blockquote(quote) => {
+                for child in &quote.children {
+                    self.remember_block_anchor(child);
+                }
+            }
+            Block::Paragraph(_)
+            | Block::CodeBlock(_)
+            | Block::Table(_)
+            | Block::ThematicBreak
+            | Block::PageBreak
+            | Block::Comment(_)
+            | Block::Caption(_)
+            | Block::Image(_)
+            | Block::DisplayMath { .. }
+            | Block::ChartImage { .. }
+            | Block::FootnoteDefinition { .. } => {}
+        }
+    }
+
+    /// Figure and table numbers follow body order across sections.
+    fn index_prepared_captions(&mut self, doc: &PreparedDocument) {
+        for section in &doc.sections {
+            for child in &section.children {
+                if let SectionBlock::Body(block) = child {
+                    self.index_caption_block(block);
+                }
+            }
+        }
+    }
+
+    fn index_captions(&mut self, blocks: &[Block]) {
+        for block in blocks {
+            self.index_caption_block(block);
+        }
+    }
+
+    fn index_caption_block(&mut self, block: &Block) {
+        match block {
+            Block::Caption(caption) => {
+                let number = match caption.kind {
+                    CaptionKind::Figure => {
+                        self.figure_seq = self.figure_seq.saturating_add(1);
+                        self.figure_seq
+                    }
+                    CaptionKind::Table => {
+                        self.table_seq = self.table_seq.saturating_add(1);
+                        self.table_seq
+                    }
+                };
+                self.caption_numbers
+                    .entry(caption.bookmark.clone())
+                    .or_insert(number);
+            }
+            Block::List(list) => {
+                for item in &list.children {
+                    for child in &item.children {
+                        self.index_caption_block(child);
+                    }
+                }
+            }
+            Block::Blockquote(quote) => {
+                for child in &quote.children {
+                    self.index_caption_block(child);
+                }
+            }
