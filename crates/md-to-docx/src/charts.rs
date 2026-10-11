@@ -939,7 +939,7 @@ mod tests {
 
     fn chart(kind: &str, width: Option<u32>, height: Option<u32>) -> String {
         let size = match (width, height) {
-            (Some(width), Some(height)) => format!(r#""width":{width},"height":{height},"#,),
+            (Some(width), Some(height)) => format!(r#""width":{width},"height":{height},"#),
             _ => String::new(),
         };
         format!(
