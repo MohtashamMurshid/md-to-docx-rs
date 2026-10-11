@@ -1,0 +1,294 @@
+    write_style(&mut xml, "Normal", "Normal", true, None)?;
+    write_style(
+        &mut xml,
+        "ListParagraph",
+        "List Paragraph",
+        false,
+        Some("Normal"),
+    )?;
+    let spacing = [
+        (360, 240),
+        (320, 160),
+        (280, 120),
+        (240, 120),
+        (220, 100),
+        (200, 100),
+    ];
+    for level in 1..=6 {
+        let size = heading_size(level);
+        let (before, after) = spacing[usize::from(level - 1)];
+        let named = format!("Heading{level}");
+        let display = format!("Heading {level}");
+        let numeric = level.to_string();
+        write_heading_style(
+            &mut xml,
+            &named,
+            &display,
+            size,
+            before,
+            after,
+            level - 1,
+            style,
+        )?;
+        write_heading_style(
+            &mut xml,
+            &numeric,
+            &display,
+            size,
+            before,
+            after,
+            level - 1,
+            style,
+        )?;
+    }
+    write_footnote_reference_style(&mut xml)?;
+    write_toc_heading_style(&mut xml)?;
+    write_style(&mut xml, "Caption", "Caption", false, Some("Normal"))?;
+    xml.end("w:styles")?;
+    Ok(xml.finish())
+}
+
+fn write_style(
+    xml: &mut Xml,
+    id: &str,
+    name: &str,
+    default: bool,
+    based_on: Option<&str>,
+) -> Result<(), MarkdownConversionError> {
+    let mut attrs = vec![("w:type", "paragraph"), ("w:styleId", id)];
+    if default {
+        attrs.push(("w:default", "1"));
+    }
+    xml.start("w:style", &attrs)?;
+    xml.empty("w:name", &[("w:val", name)])?;
+    if let Some(based_on) = based_on {
+        xml.empty("w:basedOn", &[("w:val", based_on)])?;
+    }
+    xml.empty("w:qFormat", &[])?;
+    xml.end("w:style")
+}
+
+fn write_toc_heading_style(xml: &mut Xml) -> Result<(), MarkdownConversionError> {
+    xml.start(
+        "w:style",
+        &[("w:type", "paragraph"), ("w:styleId", "TOCHeading")],
+    )?;
+    xml.empty("w:name", &[("w:val", "TOC Heading")])?;
+    xml.empty("w:basedOn", &[("w:val", "Normal")])?;
+    xml.empty("w:qFormat", &[])?;
+    xml.start("w:pPr", &[])?;
+    xml.empty("w:spacing", &[("w:after", "240")])?;
+    xml.empty("w:jc", &[("w:val", "center")])?;
+    xml.end("w:pPr")?;
+    xml.end("w:style")
+}
+
+struct TocEntryStyle {
+    size: u32,
+    bold: bool,
+    italic: bool,
+}
+
+fn toc_entry_style(level: u8, paragraph_size: u32) -> TocEntryStyle {
+    let steps = u32::from(level.saturating_sub(1));
+    let size = paragraph_size
+        .saturating_sub(steps.saturating_mul(2))
+        .max(1);
+    TocEntryStyle {
+        size,
+        bold: level == 1,
+        italic: false,
+    }
+}
+
+fn caption_label(kind: CaptionKind) -> &'static str {
+    match kind {
+        CaptionKind::Figure => "Figure",
+        CaptionKind::Table => "Table",
+    }
+}
+
+fn caption_sequence(kind: CaptionKind) -> &'static str {
+    match kind {
+        CaptionKind::Figure => "MdToDocxFigure",
+        CaptionKind::Table => "MdToDocxTable",
+    }
+}
+
+fn toc_instruction(min_depth: u8, max_depth: u8, page_numbers: bool) -> String {
+    let pages = if page_numbers { "" } else { " \\n" };
+    format!(" TOC \\o \"{min_depth}-{max_depth}\" \\h \\z{pages} ")
+}
+
+fn is_toc_paragraph(paragraph: &Paragraph) -> bool {
+    if paragraph.children.iter().any(|run| run.footnote.is_some()) {
+        return false;
+    }
+    inline_text(&paragraph.children).trim() == "[TOC]"
+}
+
+fn collect_headings(blocks: &[Block], headings: &mut Vec<TocHeading>) {
+    for block in blocks {
+        match block {
+            Block::Heading(heading) => headings.push(TocHeading {
+                text: inline_text(&heading.children),
+                level: heading.level,
+                bookmark: heading.bookmark.clone(),
+            }),
+            Block::List(list) => {
+                for item in &list.children {
+                    collect_headings(&item.children, headings);
+                }
+            }
+            Block::Blockquote(quote) => collect_headings(&quote.children, headings),
+            Block::Caption(_) | Block::FootnoteDefinition { .. } => {}
+            _ => {}
+        }
+    }
+}
+
+fn write_settings(update_fields: bool) -> Result<Vec<u8>, MarkdownConversionError> {
+    let mut xml = Xml::new()?;
+    xml.start("w:settings", &[("xmlns:w", W_NS)])?;
+    xml.empty("w:evenAndOddHeaders", &[("w:val", "false")])?;
+    if update_fields {
+        xml.empty("w:updateFields", &[])?;
+    }
+    xml.end("w:settings")?;
+    Ok(xml.finish())
+}
+
+fn empty_relationships() -> Result<Vec<u8>, MarkdownConversionError> {
+    let mut xml = Xml::new()?;
+    xml.start("Relationships", &[("xmlns", REL_NS)])?;
+    xml.end("Relationships")?;
+    Ok(xml.finish())
+}
+
+fn write_page_number_story(
+    root: &str,
+    align: &str,
+    display: &str,
+    size: u32,
+) -> Result<Vec<u8>, MarkdownConversionError> {
+    let mut xml = Xml::new()?;
+    xml.start(
+        root,
+        &[("xmlns:w", W_NS), ("xmlns:r", R_NS), ("xmlns:m", MATH_NS)],
+    )?;
+    xml.start("w:p", &[])?;
+    xml.start("w:pPr", &[])?;
+    xml.empty("w:bidi", &[("w:val", "false")])?;
+    xml.empty("w:jc", &[("w:val", align)])?;
+    xml.end("w:pPr")?;
+    xml.start("w:r", &[])?;
+    let size = size.to_string();
+    xml.start("w:rPr", &[])?;
+    xml.empty("w:sz", &[("w:val", &size)])?;
+    xml.empty("w:szCs", &[("w:val", &size)])?;
+    xml.empty("w:rtl", &[("w:val", "false")])?;
+    xml.end("w:rPr")?;
+    write_page_number_fields(&mut xml, display)?;
+    xml.end("w:r")?;
+    xml.end("w:p")?;
+    xml.end(root)?;
+    Ok(xml.finish())
+}
+
+fn write_page_number_fields(xml: &mut Xml, display: &str) -> Result<(), MarkdownConversionError> {
+    let fields: &[&str] = match display {
+        "current" => &["PAGE"],
+        "currentAndTotal" => &["PAGE", "NUMPAGES"],
+        "currentAndSectionTotal" => &["PAGE", "SECTIONPAGES"],
+        _ => &[],
+    };
+    for (index, field) in fields.iter().enumerate() {
+        if index > 0 {
+            xml.text_elem(" / ")?;
+        }
+        xml.empty("w:fldChar", &[("w:fldCharType", "begin")])?;
+        xml.start("w:instrText", &[("xml:space", "preserve")])?;
+        xml.text(field)?;
+        xml.end("w:instrText")?;
+        xml.empty("w:fldChar", &[("w:fldCharType", "separate")])?;
+        xml.empty("w:fldChar", &[("w:fldCharType", "end")])?;
+    }
+    Ok(())
+}
+
+fn write_footnote_reference_style(xml: &mut Xml) -> Result<(), MarkdownConversionError> {
+    xml.start(
+        "w:style",
+        &[("w:type", "character"), ("w:styleId", "FootnoteReference")],
+    )?;
+    xml.empty("w:name", &[("w:val", "footnote reference")])?;
+    xml.start("w:rPr", &[])?;
+    xml.empty("w:vertAlign", &[("w:val", "superscript")])?;
+    xml.end("w:rPr")?;
+    xml.end("w:style")
+}
+
+fn write_heading_style(
+    xml: &mut Xml,
+    id: &str,
+    name: &str,
+    size: u32,
+    before: u32,
+    after: u32,
+    outline: u8,
+    style: Option<&ResolvedStyle>,
+) -> Result<(), MarkdownConversionError> {
+    xml.start("w:style", &[("w:type", "paragraph"), ("w:styleId", id)])?;
+    xml.empty("w:name", &[("w:val", name)])?;
+    xml.empty("w:basedOn", &[("w:val", "Normal")])?;
+    xml.empty("w:next", &[("w:val", "Normal")])?;
+    xml.empty("w:qFormat", &[])?;
+    xml.start("w:pPr", &[])?;
+    spacing(xml, before, after, None, None)?;
+    let outline = outline.to_string();
+    xml.empty("w:outlineLvl", &[("w:val", &outline)])?;
+    xml.end("w:pPr")?;
+    xml.start("w:rPr", &[])?;
+    xml.empty("w:b", &[])?;
+    xml.empty("w:bCs", &[])?;
+    xml.empty("w:color", &[("w:val", "000000")])?;
+    let size = size.to_string();
+    xml.empty("w:sz", &[("w:val", &size)])?;
+    xml.empty("w:szCs", &[("w:val", &size)])?;
+    write_proofing_language(xml, style)?;
+    xml.end("w:rPr")?;
+    xml.end("w:style")
+}
+
+/// `w:lang` from the style the parser already resolved.
+///
+/// East Asian tags add `w:eastAsia`. Right-to-left adds `w:bidi`. A style with
+/// no language leaves the element out.
+fn write_proofing_language(
+    xml: &mut Xml,
+    style: Option<&ResolvedStyle>,
+) -> Result<(), MarkdownConversionError> {
+    let Some(style) = style else {
+        return Ok(());
+    };
+    let Some(language) = style.language.as_deref().filter(|tag| !tag.is_empty()) else {
+        return Ok(());
+    };
+    let run = run_language(language, style.direction);
+    let mut attrs = vec![("w:val", run.value.as_str())];
+    if let Some(east_asia) = run.east_asia.as_deref() {
+        attrs.push(("w:eastAsia", east_asia));
+    }
+    if let Some(bidirectional) = run.bidirectional.as_deref() {
+        attrs.push(("w:bidi", bidirectional));
+    }
+    xml.empty("w:lang", &attrs)
+}
+
+fn write_numbering(starts: &[(u32, u64)]) -> Result<Vec<u8>, MarkdownConversionError> {
+    let mut ordered = starts.to_vec();
+    ordered.sort_by_key(|(sequence, _)| *sequence);
+    let mut xml = Xml::new()?;
+    xml.start("w:numbering", &[("xmlns:w", W_NS)])?;
+    write_abstract(&mut xml, 1, true, 1)?;
+    for (sequence, start) in &ordered {
