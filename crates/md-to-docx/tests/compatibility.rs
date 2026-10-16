@@ -68,7 +68,7 @@ fn image_resolver_settings_reach_conversion_and_budgets_restart() {
 }
 #[test]
 fn image_json_settings_reach_generated_document() {
-    let options=md_to_docx::options_json::load_options_json(r#"{"imageHandling":{"dataUrls":{"enabled":false},"maxImages":0,"remote":{"enabled":true,"allowedHosts":[]}}}"#,"test").unwrap();
+    let options=md_to_docx::options_json::load_options_json(r#"{"imageHandling":{"dataUrls":{"enabled":false},"maxImages":1,"remote":{"enabled":true,"allowedHosts":[]}}}"#,"test").unwrap();
     let images = options.convert.image_handling.as_ref().unwrap();
     assert!(!images.data_urls_enabled);
     assert!(images.remote_enabled);

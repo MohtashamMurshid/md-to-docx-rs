@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
@@ -16,8 +17,9 @@ use crate::model::{
 };
 use crate::options::{
     normalize_document_metadata, run_language, Alignment, CaptionOptions, ConvertOptions,
-    Direction, DocumentMetadata, Orientation, PageNumberDisplay, PageNumberFormat,
-    PageNumberSeparator, ResolvedPageNumbering, ResolvedStyle, SectionBreak, TocMode, TocSettings,
+    Direction, DocumentMetadata, DocumentType, Orientation, PageNumberDisplay, PageNumberFormat,
+    PageNumberSeparator, ResolvedPageNumbering, ResolvedStyle, SectionBreak, TableLayout, TocMode,
+    TocSettings,
 };
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -25,6 +27,111 @@ const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relati
 const MATH_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
 const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const CT_NS: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
+const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+const W15_NS: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+const WP14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing";
+const WP_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const VT_NS_DECL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes";
+
+/// Root attributes the `docx` library writes on its WordprocessingML parts:
+/// `w14 w15 wp14` are declared and marked ignorable.
+fn story_root_attrs() -> [(&'static str, &'static str); 8] {
+    [
+        ("xmlns:w", W_NS),
+        ("xmlns:r", R_NS),
+        ("xmlns:m", MATH_NS),
+        ("xmlns:mc", MC_NS),
+        ("xmlns:w14", W14_NS),
+        ("xmlns:w15", W15_NS),
+        ("xmlns:wp14", WP14_NS),
+        ("mc:Ignorable", "w14 w15 wp14"),
+    ]
+}
+
+/// `word/comments.xml` as the `docx` library writes it: an empty comment list.
+fn write_empty_comments() -> Result<Vec<u8>, MarkdownConversionError> {
+    let mut xml = Xml::new()?;
+    xml.start(
+        "w:comments",
+        &[("xmlns:w", W_NS), ("xmlns:r", R_NS), ("xmlns:wp", WP_NS)],
+    )?;
+    xml.end("w:comments")?;
+    Ok(xml.finish())
+}
+
+/// `word/fontTable.xml` as the `docx` library writes it: no embedded fonts.
+fn write_empty_font_table() -> Result<Vec<u8>, MarkdownConversionError> {
+    let mut xml = Xml::new()?;
+    xml.start(
+        "w:fonts",
+        &[
+            ("xmlns:mc", MC_NS),
+            ("xmlns:r", R_NS),
+            ("xmlns:w", W_NS),
+            ("xmlns:w14", W14_NS),
+            ("xmlns:w15", W15_NS),
+            (
+                "xmlns:w16cex",
+                "http://schemas.microsoft.com/office/word/2018/wordml/cex",
+            ),
+            (
+                "xmlns:w16cid",
+                "http://schemas.microsoft.com/office/word/2016/wordml/cid",
+            ),
+            (
+                "xmlns:w16",
+                "http://schemas.microsoft.com/office/word/2018/wordml",
+            ),
+            (
+                "xmlns:w16sdtdh",
+                "http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash",
+            ),
+            (
+                "xmlns:w16se",
+                "http://schemas.microsoft.com/office/word/2015/wordml/symex",
+            ),
+            ("mc:Ignorable", "w14 w15 w16se w16cid w16 w16cex w16sdtdh"),
+        ],
+    )?;
+    xml.end("w:fonts")?;
+    Ok(xml.finish())
+}
+
+/// Empty `docProps/app.xml` and `docProps/custom.xml`, as written by default.
+fn write_empty_properties(namespace: &str) -> Result<Vec<u8>, MarkdownConversionError> {
+    let mut xml = Xml::new()?;
+    xml.start(
+        "Properties",
+        &[("xmlns", namespace), ("xmlns:vt", VT_NS_DECL)],
+    )?;
+    xml.end("Properties")?;
+    Ok(xml.finish())
+}
+
+/// The auxiliary parts every generated package carries, in ZIP order.
+fn default_auxiliary_parts() -> Result<Vec<(String, Vec<u8>)>, MarkdownConversionError> {
+    Ok(vec![
+        ("word/comments.xml".to_string(), write_empty_comments()?),
+        (
+            "word/_rels/comments.xml.rels".to_string(),
+            empty_relationships()?,
+        ),
+        ("word/fontTable.xml".to_string(), write_empty_font_table()?),
+        (
+            "word/_rels/fontTable.xml.rels".to_string(),
+            empty_relationships()?,
+        ),
+        (
+            "docProps/app.xml".to_string(),
+            write_empty_properties(APP_NS)?,
+        ),
+        (
+            "docProps/custom.xml".to_string(),
+            write_empty_properties(CUSTOM_NS)?,
+        ),
+    ])
+}
 const PAGE_WIDTH: &str = "11906";
 const PAGE_HEIGHT: &str = "16838";
 const CONTENT_WIDTH: u32 = 9746;
@@ -101,25 +208,18 @@ pub fn render(doc: &Document) -> Result<Parts, MarkdownConversionError> {
         ..State::default()
     };
     let document = state.write_document(doc)?;
-    let (footnotes_xml, footnote_rels) = if footnotes.is_empty() {
-        (None, None)
-    } else {
-        (
-            Some(state.write_footnotes(&footnotes)?),
-            Some(write_footnote_rels(&state.footnote_links)?),
-        )
-    };
+    let footnotes_xml = state.write_footnotes(&footnotes)?;
+    let footnote_rels = write_footnote_rels(&state.footnote_links)?;
     let media_types = state.media_types.clone();
-    let has_footnotes = footnotes_xml.is_some();
     Ok(Parts {
-        content_types: write_content_types(has_footnotes, &media_types, &state.story_parts, true)?,
+        content_types: write_content_types(&media_types, &state.story_parts)?,
         rels: write_package_rels()?,
         document,
-        document_rels: write_document_rels(&state.links, has_footnotes, &state.story_rels)?,
+        document_rels: write_document_rels(&state.links, true, &state.story_rels)?,
         styles: write_styles(None)?,
-        numbering: write_numbering(&state.ordered_starts)?,
-        footnotes: footnotes_xml,
-        footnote_rels,
+        numbering: write_numbering(&state.ordered_starts, &state.num_order)?,
+        footnotes: Some(footnotes_xml),
+        footnote_rels: Some(footnote_rels),
         settings: Some(write_settings(state.update_fields)?),
         extras: {
             let mut extras = state.media;
@@ -129,6 +229,7 @@ pub fn render(doc: &Document) -> Result<Parts, MarkdownConversionError> {
                     .iter()
                     .map(|part| (part.path.clone(), part.bytes.clone())),
             );
+            extras.extend(default_auxiliary_parts()?);
             push_legacy_core(&mut extras)?;
             extras
         },
@@ -157,31 +258,32 @@ pub fn render_prepared(
         toc_max_depth: doc.toc.max_depth,
         toc_paragraph_size: 24,
         update_fields: doc.update_fields,
+        report: matches!(options.document_type, Some(DocumentType::Report)),
         caption_options: options.captions.clone(),
         footnote_order: footnotes.iter().map(|(id, _)| id.clone()).collect(),
         ..State::default()
     };
     let document = state.write_prepared(&doc)?;
-    let (footnotes_xml, footnote_rels) = if footnotes.is_empty() {
-        (None, None)
-    } else {
-        (
-            Some(state.write_footnotes(&footnotes)?),
-            Some(write_footnote_rels(&state.footnote_links)?),
-        )
-    };
+    state.active_style = doc.sections.last().map(|section| section.style.clone());
+    let footnotes_xml = state.write_footnotes(&footnotes)?;
+    let footnote_rels = write_footnote_rels(&state.footnote_links)?;
     let media_types = state.media_types.clone();
-    let has_footnotes = footnotes_xml.is_some();
-    let document_style = doc.sections.first().map(|section| section.style.clone());
+    let mut document_style = crate::options::resolve_style(None, options.style.as_ref());
+    if document_style.language.is_none() {
+        document_style.language = options
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.language.clone());
+    }
     Ok(Parts {
-        content_types: write_content_types(has_footnotes, &media_types, &state.story_parts, true)?,
+        content_types: write_content_types(&media_types, &state.story_parts)?,
         rels: write_package_rels()?,
         document,
-        document_rels: write_document_rels(&state.links, has_footnotes, &state.story_rels)?,
-        styles: write_styles(document_style.as_ref())?,
-        numbering: write_numbering(&state.ordered_starts)?,
-        footnotes: footnotes_xml,
-        footnote_rels,
+        document_rels: write_document_rels(&state.links, true, &state.story_rels)?,
+        styles: write_styles(Some(&document_style))?,
+        numbering: write_numbering(&state.ordered_starts, &state.num_order)?,
+        footnotes: Some(footnotes_xml),
+        footnote_rels: Some(footnote_rels),
         settings: Some(write_settings(state.update_fields)?),
         extras: {
             let mut extras = state.media;
@@ -191,6 +293,7 @@ pub fn render_prepared(
                     .iter()
                     .map(|part| (part.path.clone(), part.bytes.clone())),
             );
+            extras.extend(default_auxiliary_parts()?);
             push_legacy_core(&mut extras)?;
             extras
         },
@@ -221,13 +324,15 @@ pub fn plant_footnote_images(doc: &mut Document, markdown: &str) {
 
 #[derive(Default)]
 struct State {
+    /// `documentType: "report"` shades table headers darker.
+    report: bool,
     /// Ordered lists as `(sequence_id, start)`. Bullets stay on numId 1.
     ordered_starts: Vec<(u32, u64)>,
     links: Vec<String>,
     footnote_links: Vec<String>,
     /// Definition ids in document order. XML ids are 1-based positions.
     footnote_order: Vec<String>,
-    bookmark_id: u32,
+    num_order: Vec<u32>,
     in_footnote: bool,
     pending_footnote_ref: bool,
     media: Vec<(String, Vec<u8>)>,
@@ -262,8 +367,6 @@ struct State {
     table_seq: u32,
     /// Labels, alignment, italic, and size from `ConvertOptions.captions`.
     caption_options: Option<CaptionOptions>,
-    /// `wp:docPr` ids. The first drawing is 1.
-    drawing_id: u32,
 }
 
 #[derive(Clone)]
@@ -307,15 +410,60 @@ struct DrawnSection {
     last: bool,
 }
 
+/// A rendered chart as the image writer sees it. Empty bytes mean failure.
+fn chart_as_image(bytes: &[u8], width_px: u32, height_px: u32, alt: &str) -> Image {
+    Image {
+        failure: None,
+        bytes: (!bytes.is_empty()).then(|| bytes.to_vec()),
+        content_type: "image/png".to_string(),
+        width_px,
+        height_px,
+        alt: alt.to_string(),
+        title: None,
+        // `processChartBlock` appends `#WxH` to the data URL.
+        url: format!("#{width_px}x{height_px}"),
+    }
+}
+
+/// Numbering for an image that is the first content of a list item.
+struct ImageMarker {
+    level: u32,
+    num_key: u32,
+    task: Option<&'static str>,
+}
+
+/// The run the parser inserts for a task item, when it is the only content.
+fn task_marker_text(runs: &[Inline]) -> Option<&'static str> {
+    let [run] = runs else {
+        return None;
+    };
+    if run.bold || run.italic || run.underline || run.strike || run.code || run.link.is_some() {
+        return None;
+    }
+    match run.text.as_str() {
+        "\u{2610} " => Some("\u{2610} "),
+        "\u{2612} " => Some("\u{2612} "),
+        _ => None,
+    }
+}
+
 struct QuoteCtx {
     level: u32,
     callout: Option<CalloutKind>,
     /// Direct paragraphs of a plain quote are italic. CalloutKind paragraphs are not.
     italic_paragraphs: bool,
+    /// `resolveCalloutStyle` output: defaults merged with `style.calloutStyles`.
+    label: String,
+    border: String,
+    fill: Option<String>,
+    title_color: String,
+    /// `style.blockquoteAlignment`.
+    alignment: Option<&'static str>,
 }
 
 struct Look {
     size: Option<u32>,
+    code_context: bool,
     force_bold: bool,
     force_italic: bool,
     color: Option<&'static str>,
@@ -325,6 +473,7 @@ impl Look {
     fn body() -> Self {
         Self {
             size: None,
+            code_context: false,
             force_bold: false,
             force_italic: false,
             color: None,
@@ -334,6 +483,7 @@ impl Look {
     fn sized(size: u32) -> Self {
         Self {
             size: Some(size),
+            code_context: true,
             force_bold: false,
             force_italic: false,
             color: None,
@@ -480,22 +630,6 @@ fn story_wants_number_paragraph(
     }
     let display = body.page_number_display.unwrap_or(fallback_display);
     !rich || !text.is_empty() || display != PageNumberDisplay::None
-}
-
-fn splice_sect_pr(body: &[u8], sect: &[u8]) -> Option<Vec<u8>> {
-    let text = std::str::from_utf8(body).ok()?;
-    let trimmed = text.trim_end();
-    if !trimmed.ends_with("</w:p>") {
-        return None;
-    }
-    let p_start = trimmed.rfind("<w:p>")?;
-    let ppr_rel = trimmed[p_start..].find("</w:pPr>")?;
-    let insert_at = p_start + ppr_rel;
-    let mut merged = Vec::with_capacity(body.len() + sect.len());
-    merged.extend_from_slice(&body[..insert_at]);
-    merged.extend_from_slice(sect);
-    merged.extend_from_slice(&body[insert_at..]);
-    Some(merged)
 }
 
 fn prepared_body_blocks(doc: &PreparedDocument) -> Vec<Block> {
@@ -650,13 +784,14 @@ impl State {
         let has_footnotes = !self.footnote_order.is_empty();
         self.attach_default_footer()?;
         let mut xml = Xml::new()?;
-        xml.start(
-            "w:document",
-            &[("xmlns:w", W_NS), ("xmlns:r", R_NS), ("xmlns:m", MATH_NS)],
-        )?;
+        xml.start("w:document", &story_root_attrs())?;
         xml.start("w:body", &[])?;
-        if doc.children.is_empty() {
-            self.write_body_paragraph(&mut xml, &[], Look::body())?;
+        let has_body = doc
+            .children
+            .iter()
+            .any(|block| !matches!(block, Block::FootnoteDefinition { .. }));
+        if !has_body {
+            write_empty_paragraph(&mut xml)?;
         } else {
             let mut previous_code = false;
             for block in &doc.children {
@@ -695,7 +830,11 @@ impl State {
             self.attach_section_stories(section)?;
             let rel_end = self.story_rels.len();
             let mut xml = Xml::fragment();
-            let mut wrote = false;
+            // A `[TOC]` placeholder counts as content even when no heading
+            // qualifies, exactly like the TypeScript placeholder paragraph.
+            let has_children = section.children.iter().any(|child| {
+                !matches!(child, SectionBlock::Body(Block::FootnoteDefinition { .. }))
+            });
             let mut previous_code = false;
             for child in &section.children {
                 match child {
@@ -705,21 +844,24 @@ impl State {
                         if code && previous_code {
                             write_code_spacer(&mut xml)?;
                         }
-                        self.write_block(&mut xml, block, None)?;
+                        if section.markdown.trim().is_empty()
+                            && matches!(block, Block::Paragraph(paragraph) if paragraph.children.is_empty())
+                        {
+                            write_empty_paragraph(&mut xml)?;
+                        } else {
+                            self.write_block(&mut xml, block, None)?;
+                        }
                         previous_code = code;
-                        wrote = true;
                     }
                     SectionBlock::TableOfContents(toc) => {
                         if self.write_prepared_toc(&mut xml, toc)? {
-                            wrote = true;
                             previous_code = false;
                         }
                     }
                 }
             }
-            if !wrote {
-                let look = self.body_look();
-                self.write_body_paragraph(&mut xml, &[], look)?;
+            if !has_children {
+                write_empty_paragraph(&mut xml)?;
             }
             drawn.push(DrawnSection {
                 body: xml.finish(),
@@ -746,10 +888,7 @@ impl State {
         let has_footnotes = !self.footnote_order.is_empty();
         self.assign_story_ids(has_footnotes);
         let mut xml = Xml::new()?;
-        xml.start(
-            "w:document",
-            &[("xmlns:w", W_NS), ("xmlns:r", R_NS), ("xmlns:m", MATH_NS)],
-        )?;
+        xml.start("w:document", &story_root_attrs())?;
         xml.start("w:body", &[])?;
         if drawn.is_empty() {
             self.write_body_paragraph(&mut xml, &[], Look::body())?;
@@ -760,8 +899,6 @@ impl State {
                 if section.last {
                     xml.push_bytes(&section.body);
                     xml.push_bytes(&sect);
-                } else if let Some(merged) = splice_sect_pr(&section.body, &sect) {
-                    xml.push_bytes(&merged);
                 } else {
                     xml.push_bytes(&section.body);
                     xml.start("w:p", &[])?;
@@ -941,11 +1078,14 @@ impl State {
                 ("w:gutter", "0"),
             ],
         )?;
+        xml.empty("w:pgNumType", &[])?;
+        xml.empty("w:docGrid", &[("w:linePitch", "360")])?;
         xml.end("w:sectPr")
     }
 
     fn assign_story_ids(&mut self, has_footnotes: bool) {
-        let first_id = 3 + self.links.len() + usize::from(has_footnotes);
+        let first_id = 4 + self.links.len();
+        let _ = has_footnotes;
         for (number, rel) in (first_id..).zip(&mut self.story_rels) {
             rel.id = format!("rId{number}");
         }
@@ -981,7 +1121,10 @@ impl State {
             .as_ref()
             .and_then(|style| style.paragraph_size)
         {
-            Some(size) => Look::sized(size),
+            Some(size) => Look {
+                size: Some(size),
+                ..Look::body()
+            },
             None => Look::body(),
         }
     }
@@ -1013,13 +1156,33 @@ impl State {
         }
     }
 
-    fn body_spacing(&self) -> (u32, u32, u32) {
-        let Some(style) = &self.active_style else {
-            return (240, 240, 276);
-        };
-        let spacing = style.paragraph_spacing;
-        let line = (style.line_spacing * 240.0).round() as u32;
-        (spacing, spacing, line.max(1))
+    /// `style.paragraphSpacing` in twips.
+    fn paragraph_spacing(&self) -> f64 {
+        self.active_style
+            .as_ref()
+            .map(|style| f64::from(style.paragraph_spacing))
+            .unwrap_or(240.0)
+    }
+
+    /// `style.headingSpacing` in twips.
+    fn heading_spacing(&self) -> f64 {
+        self.active_style
+            .as_ref()
+            .map(|style| f64::from(style.heading_spacing))
+            .unwrap_or(240.0)
+    }
+
+    /// `style.lineSpacing * 240`, unrounded like the TypeScript renderer.
+    fn line_twips(&self) -> f64 {
+        self.active_style
+            .as_ref()
+            .map(|style| style.line_spacing * 240.0)
+            .unwrap_or(276.0)
+    }
+
+    fn body_spacing(&self) -> (f64, f64, f64) {
+        let spacing = self.paragraph_spacing();
+        (spacing, spacing, self.line_twips())
     }
 
     fn body_align(&self) -> &'static str {
@@ -1036,11 +1199,97 @@ impl State {
         }
     }
 
-    fn bidi_val(&self) -> &'static str {
-        match self.active_style.as_ref().map(|style| style.direction) {
-            Some(Direction::Rtl) => "true",
-            Some(Direction::Ltr) | None => "false",
+    /// Build the quote context: callout colours come from the defaults
+    /// overlaid with `style.calloutStyles`, like `resolveCalloutStyle`.
+    fn quote_ctx(&self, level: u32, callout: Option<CalloutKind>, italic: bool) -> QuoteCtx {
+        let name = match callout {
+            Some(CalloutKind::Note) => "note",
+            Some(CalloutKind::Tip) => "tip",
+            Some(CalloutKind::Important) => "important",
+            Some(CalloutKind::Warning) => "warning",
+            Some(CalloutKind::Caution) => "caution",
+            None => "",
+        };
+        let overrides = self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.callout_styles.as_ref())
+            .and_then(|styles| styles.get(name));
+        let pick = |custom: Option<&String>, default: &str| {
+            custom.cloned().unwrap_or_else(|| default.to_string())
+        };
+        QuoteCtx {
+            level,
+            italic_paragraphs: italic,
+            label: pick(
+                overrides.and_then(|entry| entry.label.as_ref()),
+                callout_label(callout.as_ref()).unwrap_or("Note"),
+            ),
+            border: pick(
+                overrides.and_then(|entry| entry.border_color.as_ref()),
+                callout_border_color(callout.as_ref()),
+            ),
+            fill: match (
+                overrides.and_then(|entry| entry.background_color.as_ref()),
+                callout_fill(callout.as_ref()),
+            ) {
+                (Some(custom), _) => Some(custom.clone()),
+                (None, default) => default.map(str::to_string),
+            },
+            title_color: pick(
+                overrides.and_then(|entry| entry.title_color.as_ref()),
+                callout_title(callout.as_ref()),
+            ),
+            alignment: self
+                .active_style
+                .as_ref()
+                .and_then(|style| style.blockquote_alignment)
+                .map(alignment_name),
+            callout,
         }
+    }
+
+    fn is_rtl(&self) -> bool {
+        matches!(
+            self.active_style.as_ref().map(|style| style.direction),
+            Some(Direction::Rtl)
+        )
+    }
+
+    /// `bidirectional` as `docx` writes it: `<w:bidi/>` on, `w:val="false"` off.
+    fn write_bidi(&self, xml: &mut Xml) -> Result<(), MarkdownConversionError> {
+        if self.is_rtl() {
+            xml.empty("w:bidi", &[])
+        } else {
+            xml.empty("w:bidi", &[("w:val", "false")])
+        }
+    }
+
+    /// `rightToLeft` as `docx` writes it: `<w:rtl/>` on, `w:val="false"` off.
+    fn write_rtl(&self, xml: &mut Xml) -> Result<(), MarkdownConversionError> {
+        if self.is_rtl() {
+            xml.empty("w:rtl", &[])
+        } else {
+            xml.empty("w:rtl", &[("w:val", "false")])
+        }
+    }
+
+    /// `w:numId` for a numbering key (1 is bullets, otherwise sequence + 1),
+    /// assigned in order of first use like `createConcreteNumberingInstance`.
+    fn concrete_num_id(&mut self, key: u32) -> u32 {
+        if key == 1 {
+            return 1;
+        }
+        let position = match self.num_order.iter().position(|known| *known == key) {
+            Some(position) => position,
+            None => {
+                self.num_order.push(key);
+                self.num_order.len() - 1
+            }
+        };
+        u32::try_from(position)
+            .unwrap_or(u32::MAX)
+            .saturating_add(2)
     }
 
     fn heading_align(&self, level: u8) -> Option<&'static str> {
@@ -1329,7 +1578,6 @@ impl State {
         align: Alignment,
     ) -> Result<(), MarkdownConversionError> {
         let align = alignment_name(align);
-        let bidi = self.bidi_val();
         let size = self
             .active_style
             .as_ref()
@@ -1338,7 +1586,7 @@ impl State {
             .to_string();
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
-        xml.empty("w:bidi", &[("w:val", bidi)])?;
+        self.write_bidi(xml)?;
         xml.empty("w:jc", &[("w:val", align)])?;
         xml.end("w:pPr")?;
         xml.start("w:r", &[])?;
@@ -1346,7 +1594,8 @@ impl State {
         xml.empty("w:sz", &[("w:val", &size)])?;
         xml.empty("w:szCs", &[("w:val", &size)])?;
         self.write_run_font(xml)?;
-        xml.empty("w:rtl", &[("w:val", bidi)])?;
+        self.write_rtl(xml)?;
+        write_proofing_language(xml, self.active_style.as_ref())?;
         xml.end("w:rPr")?;
         if !text.is_empty() {
             xml.text_elem(text)?;
@@ -1419,29 +1668,38 @@ impl State {
                 ("w:gutter", &gutter),
             ],
         )?;
-        if let Some(numbering) = &section.numbering {
-            let start = numbering.start.map(|value| value.to_string());
-            let format = numbering.format.map(page_format_name);
-            let separator = numbering.separator.map(page_separator_name);
-            let mut attrs = Vec::new();
-            if let Some(start) = start.as_deref() {
-                attrs.push(("w:start", start));
-            }
-            if let Some(format) = format {
-                attrs.push(("w:fmt", format));
-            }
-            if let Some(separator) = separator {
-                attrs.push(("w:chapSep", separator));
-            }
-            if !attrs.is_empty() {
-                xml.empty("w:pgNumType", &attrs)?;
-            }
+        let start = section
+            .numbering
+            .as_ref()
+            .and_then(|numbering| numbering.start)
+            .map(|value| value.to_string());
+        let format = section
+            .numbering
+            .as_ref()
+            .and_then(|numbering| numbering.format)
+            .map(page_format_name);
+        let separator = section
+            .numbering
+            .as_ref()
+            .and_then(|numbering| numbering.separator)
+            .map(page_separator_name);
+        let mut attrs = Vec::new();
+        if let Some(start) = start.as_deref() {
+            attrs.push(("w:start", start));
         }
+        if let Some(format) = format {
+            attrs.push(("w:fmt", format));
+        }
+        if let Some(separator) = separator {
+            attrs.push(("w:chapSep", separator));
+        }
+        xml.empty("w:pgNumType", &attrs)?;
         match section.title_page {
             Some(true) => xml.empty("w:titlePg", &[])?,
             Some(false) => xml.empty("w:titlePg", &[("w:val", "false")])?,
             None => {}
         }
+        xml.empty("w:docGrid", &[("w:linePitch", "360")])?;
         xml.end("w:sectPr")?;
         Ok(xml.finish())
     }
@@ -1479,7 +1737,7 @@ impl State {
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
         xml.empty("w:pStyle", &[("w:val", "TOCHeading")])?;
-        xml.empty("w:bidi", &[("w:val", "false")])?;
+        self.write_bidi(xml)?;
         xml.empty("w:spacing", &[("w:after", "240")])?;
         xml.empty("w:jc", &[("w:val", "center")])?;
         xml.end("w:pPr")?;
@@ -1508,7 +1766,7 @@ impl State {
             &[("w:val", "right"), ("w:pos", &pos), ("w:leader", leader)],
         )?;
         xml.end("w:tabs")?;
-        xml.empty("w:bidi", &[("w:val", "false")])?;
+        self.write_bidi(xml)?;
         xml.empty("w:spacing", &[("w:after", "120")])?;
         xml.empty("w:ind", &[("w:left", &indent)])?;
         xml.end("w:pPr")?;
@@ -1584,7 +1842,7 @@ impl State {
         xml.empty("w:sz", &[("w:val", &size)])?;
         xml.empty("w:szCs", &[("w:val", &size)])?;
         self.write_run_font(xml)?;
-        xml.empty("w:rtl", &[("w:val", self.bidi_val())])?;
+        self.write_rtl(xml)?;
         xml.end("w:rPr")?;
         xml.text_elem(text)?;
         xml.end("w:r")
@@ -1615,14 +1873,14 @@ impl State {
             Block::PageBreak => self.write_page_break(xml),
             Block::Comment(text) => self.write_comment(xml, text, quote),
             Block::Caption(caption) => self.write_caption(xml, caption),
-            Block::Image(image) => self.write_image_block(xml, image, quote),
+            Block::Image(image) => self.write_image_paragraph(xml, image, quote, None),
             Block::DisplayMath { omml } => self.write_display_math(xml, omml, quote),
             Block::ChartImage {
                 bytes,
                 width_px,
                 height_px,
                 alt,
-            } => self.write_chart_image(xml, bytes, *width_px, *height_px, alt, quote),
+            } => self.write_chart_image(xml, bytes, *width_px, *height_px, alt, quote, None),
             Block::FootnoteDefinition { .. } if self.in_header_footer => Err(
                 MarkdownConversionError::new("Word headers and footers cannot contain footnotes"),
             ),
@@ -1641,6 +1899,8 @@ impl State {
     }
 
     /// Chart PNG bytes use the same drawing and `word/media` path as images.
+    /// Empty bytes carry the failure message in `alt`.
+    #[allow(clippy::too_many_arguments)] // Image payload, dimensions and paragraph context.
     fn write_chart_image(
         &mut self,
         xml: &mut Xml,
@@ -1649,39 +1909,11 @@ impl State {
         height_px: u32,
         alt: &str,
         quote: Option<&QuoteCtx>,
+        marker: Option<ImageMarker>,
     ) -> Result<(), MarkdownConversionError> {
-        if bytes.is_empty() {
-            return self.write_content_paragraph(xml, quote, |state, xml| {
-                state.write_marked_run(
-                    xml,
-                    "[Chart could not be rendered]",
-                    Marks {
-                        bold: false,
-                        italic: true,
-                        underline: false,
-                        strike: false,
-                        color: "FF0000",
-                        size: state.caption_size(),
-                        courier: false,
-                        shade: None,
-                    },
-                )
-            });
-        }
-        self.write_content_paragraph(xml, quote, |state, xml| {
-            state.embed_raster(
-                xml,
-                alt,
-                None,
-                bytes,
-                "image/png",
-                ImageDimensions {
-                    hint_width: nonzero(width_px),
-                    hint_height: nonzero(height_px),
-                    ..ImageDimensions::default()
-                },
-            )
-        })
+        let image = chart_as_image(bytes, width_px, height_px, alt);
+        let placeholder = bytes.is_empty().then_some(alt);
+        self.write_image_paragraph_with(xml, &image, quote, marker, placeholder)
     }
 
     fn write_content_paragraph(
@@ -1694,13 +1926,19 @@ impl State {
         xml.start("w:pPr", &[])?;
         if let Some(quote) = quote {
             write_quote_frame(xml, quote)?;
-            spacing(xml, 240, 240, None, None)?;
+            self.write_bidi(xml)?;
+            spacing(
+                xml,
+                self.paragraph_spacing(),
+                self.paragraph_spacing(),
+                None,
+                None,
+            )?;
             indent(xml, 720 * quote.level)?;
         } else {
             let (before, after, line) = self.body_spacing();
             let align = self.body_align();
-            let bidi = self.bidi_val();
-            xml.empty("w:bidi", &[("w:val", bidi)])?;
+            self.write_bidi(xml)?;
             spacing(xml, before, after, Some(line), None)?;
             xml.empty("w:jc", &[("w:val", align)])?;
         }
@@ -1730,17 +1968,17 @@ impl State {
         let marks = self.caption_marks(size);
         let look = Look {
             size: Some(size),
+            code_context: true,
             force_bold: false,
             force_italic: marks.italic,
             color: None,
         };
         let (before, after, line) = self.caption_spacing();
-        let bidi = self.bidi_val();
         let align = self.caption_align_name();
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
         xml.empty("w:pStyle", &[("w:val", "Caption")])?;
-        xml.empty("w:bidi", &[("w:val", bidi)])?;
+        self.write_bidi(xml)?;
         spacing(xml, before, after, Some(line), None)?;
         xml.empty("w:jc", &[("w:val", align)])?;
         xml.end("w:pPr")?;
@@ -1754,7 +1992,7 @@ impl State {
                 ],
             )?;
         }
-        self.write_marked_run(xml, &format!("{label} "), marks)?;
+        self.write_marked_run(xml, &format!("{label} "), marks.clone())?;
         let instruction = format!(" SEQ {sequence} \\* ARABIC ");
         self.write_simple_field(xml, &instruction, &number.to_string(), &look)?;
         self.update_fields = true;
@@ -1788,12 +2026,15 @@ impl State {
     ) -> Result<(), MarkdownConversionError> {
         let (before, after, line) = self.body_spacing();
         let align = self.body_align();
-        let bidi = self.bidi_val();
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
-        xml.empty("w:bidi", &[("w:val", bidi)])?;
+        self.write_bidi(xml)?;
         spacing(xml, before, after, Some(line), None)?;
         xml.empty("w:jc", &[("w:val", align)])?;
+        if align == "both" {
+            // `paragraphFromInlineNodes` zeroes the indent for JUSTIFIED text.
+            xml.empty("w:ind", &[("w:left", "0"), ("w:right", "0")])?;
+        }
         xml.end("w:pPr")?;
         self.write_pending_ref(xml)?;
         self.write_runs(xml, runs, &look)?;
@@ -1808,14 +2049,18 @@ impl State {
         let level = heading.level.clamp(1, 6);
         let numeric = level.to_string();
         let named = format!("Heading{level}");
-        let before = if level == 1 { 480 } else { 240 };
-        let bidi = self.bidi_val();
+        let heading_spacing = self.heading_spacing();
+        let before = if level == 1 {
+            heading_spacing * 2.0
+        } else {
+            heading_spacing
+        };
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
         xml.empty("w:pStyle", &[("w:val", &numeric)])?;
         xml.empty("w:pStyle", &[("w:val", &named)])?;
-        xml.empty("w:bidi", &[("w:val", bidi)])?;
-        spacing(xml, before, 120, None, None)?;
+        self.write_bidi(xml)?;
+        spacing(xml, before, heading_spacing / 2.0, None, None)?;
         if let Some(align) = self.heading_align(level) {
             xml.empty("w:jc", &[("w:val", align)])?;
         }
@@ -1862,9 +2107,14 @@ impl State {
         } else {
             1
         };
-        let ilvl = level.min(8);
+        // `docx` accepts levels 0 to 9 and throws for deeper nesting.
+        if level > 9 {
+            return Err(MarkdownConversionError::new(
+                "Failed to convert markdown to docx: Level cannot be greater than 9. Read more here: https://answers.microsoft.com/en-us/msoffice/forum/all/does-word-support-more-than-9-list-levels/d130fdcd-1781-446d-8c84-c6c79124e4d7",
+            ));
+        }
         for item in &list.children {
-            self.write_list_item(xml, item, ilvl, num_id, quote)?;
+            self.write_list_item(xml, item, level, num_id, quote)?;
         }
         Ok(())
     }
@@ -1904,23 +2154,65 @@ impl State {
                             _ => unreachable!("image count only covers image blocks"),
                         })
                         .collect::<Vec<_>>();
-                    if saw_content {
-                        self.write_continuation(xml, &paragraph.children, level, quote, &images)?;
+                    let task = if saw_content {
+                        None
                     } else {
-                        self.write_list_paragraph(
-                            xml,
-                            &paragraph.children,
+                        task_marker_text(&paragraph.children)
+                    };
+                    if let (Some(task), Some((first, rest))) = (task, images.split_first()) {
+                        // `- [ ] ![alt](url)`: the marker and the image share
+                        // one list paragraph.
+                        let marker = ImageMarker {
                             level,
-                            num_id,
-                            quote,
-                            &images,
-                        )?;
+                            num_key: num_id,
+                            task: Some(task),
+                        };
+                        self.write_image_paragraph(xml, first, quote, Some(marker))?;
+                        for image in rest {
+                            self.write_image_paragraph(xml, image, quote, None)?;
+                        }
+                    } else {
+                        if saw_content {
+                            self.write_continuation(xml, &paragraph.children, level, quote, &[])?;
+                        } else {
+                            self.write_list_paragraph(
+                                xml,
+                                &paragraph.children,
+                                level,
+                                num_id,
+                                quote,
+                                &[],
+                            )?;
+                        }
+                        for image in images {
+                            self.write_image_paragraph(xml, image, quote, None)?;
+                        }
                     }
                     saw_content = true;
                     index += 1 + image_count;
                 }
                 Block::Image(image) => {
-                    self.write_listed_image(xml, image, level, num_id, quote, saw_content)?;
+                    let marker = (!saw_content).then_some(ImageMarker {
+                        level,
+                        num_key: num_id,
+                        task: None,
+                    });
+                    self.write_image_paragraph(xml, image, quote, marker)?;
+                    saw_content = true;
+                    index += 1;
+                }
+                Block::ChartImage {
+                    bytes,
+                    width_px,
+                    height_px,
+                    alt,
+                } => {
+                    let marker = (!saw_content).then_some(ImageMarker {
+                        level,
+                        num_key: num_id,
+                        task: None,
+                    });
+                    self.write_chart_image(xml, bytes, *width_px, *height_px, alt, quote, marker)?;
                     saw_content = true;
                     index += 1;
                 }
@@ -1934,6 +2226,15 @@ impl State {
                 }
                 Block::FootnoteDefinition { .. } => {
                     self.write_block(xml, &item.children[index], quote)?;
+                    index += 1;
+                }
+                Block::Table(_) => {
+                    // `renderListItem` keeps only paragraphs: the marker
+                    // paragraph survives, the table does not.
+                    if !saw_content {
+                        self.write_list_paragraph(xml, &[], level, num_id, quote, &[])?;
+                        saw_content = true;
+                    }
                     index += 1;
                 }
                 _ => {
@@ -1962,7 +2263,7 @@ impl State {
         images: &[&Image],
     ) -> Result<(), MarkdownConversionError> {
         let ilvl = level.to_string();
-        let num = num_id.to_string();
+        let num = self.concrete_num_id(num_id).to_string();
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
         xml.empty("w:pStyle", &[("w:val", "ListParagraph")])?;
@@ -1972,11 +2273,24 @@ impl State {
         xml.end("w:numPr")?;
         if let Some(quote) = quote {
             write_quote_frame(xml, quote)?;
-            spacing(xml, 240, 240, None, None)?;
+            self.write_bidi(xml)?;
+            spacing(
+                xml,
+                self.paragraph_spacing(),
+                self.paragraph_spacing(),
+                None,
+                None,
+            )?;
             indent(xml, 720 * quote.level)?;
         } else {
-            xml.empty("w:bidi", &[("w:val", "false")])?;
-            spacing(xml, 120, 120, None, None)?;
+            self.write_bidi(xml)?;
+            spacing(
+                xml,
+                self.paragraph_spacing() / 2.0,
+                self.paragraph_spacing() / 2.0,
+                None,
+                None,
+            )?;
         }
         xml.end("w:pPr")?;
         self.write_pending_ref(xml)?;
@@ -2000,11 +2314,24 @@ impl State {
         xml.start("w:pPr", &[])?;
         if let Some(quote) = quote {
             write_quote_frame(xml, quote)?;
-            spacing(xml, 240, 240, None, None)?;
+            self.write_bidi(xml)?;
+            spacing(
+                xml,
+                self.paragraph_spacing(),
+                self.paragraph_spacing(),
+                None,
+                None,
+            )?;
             indent(xml, 720 * quote.level)?;
         } else {
-            xml.empty("w:bidi", &[("w:val", "false")])?;
-            spacing(xml, 120, 120, None, None)?;
+            self.write_bidi(xml)?;
+            spacing(
+                xml,
+                self.paragraph_spacing() / 2.0,
+                self.paragraph_spacing() / 2.0,
+                None,
+                None,
+            )?;
             indent(xml, 720 * (level + 1))?;
         }
         xml.end("w:pPr")?;
@@ -2027,21 +2354,22 @@ impl State {
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
         write_quote_frame(xml, quote)?;
-        spacing(xml, 240, 240, None, None)?;
+        self.write_bidi(xml)?;
+        spacing(
+            xml,
+            self.paragraph_spacing(),
+            self.paragraph_spacing(),
+            None,
+            None,
+        )?;
         indent(xml, 720 * quote.level)?;
         xml.end("w:pPr")?;
         self.write_pending_ref(xml)?;
         if label {
-            let text = callout_label(quote.callout.as_ref()).unwrap_or("Note");
-            self.write_marked_run(
-                xml,
-                text,
-                plain_marks(
-                    self.quote_size(),
-                    callout_title(quote.callout.as_ref()),
-                    true,
-                ),
-            )?;
+            let mut marks = plain_marks(self.quote_size(), "000000", true);
+            marks.color = Cow::Owned(quote.title_color.clone());
+            let text = quote.label.clone();
+            self.write_marked_run(xml, &text, marks)?;
         } else {
             let mut look = Look::sized(self.quote_size());
             look.force_italic = quote.italic_paragraphs;
@@ -2056,15 +2384,16 @@ impl State {
         block: &Blockquote,
         parent: Option<&QuoteCtx>,
     ) -> Result<(), MarkdownConversionError> {
-        let ctx = QuoteCtx {
-            level: parent.map(|quote| quote.level).unwrap_or(0) + 1,
-            callout: block
-                .callout
-                .as_ref()
-                .map(copy_callout)
-                .or_else(|| parent.and_then(|quote| quote.callout.as_ref().map(copy_callout))),
-            italic_paragraphs: block.callout.is_none(),
-        };
+        let callout = block
+            .callout
+            .as_ref()
+            .map(copy_callout)
+            .or_else(|| parent.and_then(|quote| quote.callout.as_ref().map(copy_callout)));
+        let ctx = self.quote_ctx(
+            parent.map(|quote| quote.level).unwrap_or(0) + 1,
+            callout,
+            block.callout.is_none(),
+        );
         if block.callout.is_some() {
             self.write_quote_paragraph(xml, &[], &ctx, true)?;
         }
@@ -2099,24 +2428,42 @@ impl State {
                 ("w:space", space),
             ],
         )?;
-        if quote.is_some() {
-            let color = quote_border(quote);
+        if let Some(quote) = quote {
             xml.empty(
                 "w:left",
-                &[("w:val", "single"), ("w:color", color), ("w:sz", "3")],
+                &[
+                    ("w:val", "single"),
+                    ("w:color", quote.border.as_str()),
+                    ("w:sz", "3"),
+                ],
             )?;
         }
         xml.end("w:pBdr")?;
         if let Some(quote) = quote {
-            if let Some(fill) = callout_fill(quote.callout.as_ref()) {
+            if let Some(fill) = &quote.fill {
                 xml.empty("w:shd", &[("w:fill", fill)])?;
             }
-            xml.empty("w:bidi", &[("w:val", "false")])?;
-            spacing(xml, 240, 240, None, None)?;
+            if let Some(align) = quote.alignment {
+                xml.empty("w:jc", &[("w:val", align)])?;
+            }
+            self.write_bidi(xml)?;
+            spacing(
+                xml,
+                self.paragraph_spacing(),
+                self.paragraph_spacing(),
+                None,
+                None,
+            )?;
             let left = quote.level * 720 + list_indent.unwrap_or(0);
             indent(xml, left)?;
         } else {
-            spacing(xml, 120, 120, None, None)?;
+            spacing(
+                xml,
+                self.paragraph_spacing() / 2.0,
+                self.paragraph_spacing() / 2.0,
+                None,
+                None,
+            )?;
             if let Some(left) = list_indent {
                 indent(xml, left)?;
             }
@@ -2147,10 +2494,22 @@ impl State {
         }
         xml.end("w:pBdr")?;
         xml.empty("w:shd", &[("w:fill", chrome.fill.as_str())])?;
-        xml.empty("w:bidi", &[("w:val", "false")])?;
-        spacing(xml, 240, 240, Some(360), Some("exact"))?;
+        self.write_bidi(xml)?;
+        spacing(
+            xml,
+            self.paragraph_spacing(),
+            self.paragraph_spacing(),
+            Some(360.0),
+            Some("exact"),
+        )?;
         indent(xml, 360)?;
-        xml.empty("w:jc", &[("w:val", "left")])?;
+        let code_align = self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.code_block_alignment)
+            .map(alignment_name)
+            .unwrap_or("left");
+        xml.empty("w:jc", &[("w:val", code_align)])?;
         xml.end("w:pPr")?;
         self.write_pending_ref(xml)?;
         let (label_size, line_size) = self.code_sizes();
@@ -2202,22 +2561,17 @@ impl State {
         spans: &[HighlightPaint],
         size: u32,
     ) -> Result<(), MarkdownConversionError> {
-        let mut line_start = true;
+        // `pushTextRuns`: every segment of every span, not just line starts,
+        // has its leading whitespace turned into no-break spaces.
         for span in spans {
             let parts: Vec<&str> = span.text.split('\n').collect();
             for (index, segment) in parts.iter().enumerate() {
                 if !segment.is_empty() {
-                    let text = if line_start {
-                        leading_nbsp(segment)
-                    } else {
-                        (*segment).to_string()
-                    };
+                    let text = leading_nbsp(segment);
                     self.write_code_run(xml, &text, size, span.color.as_deref(), false, false)?;
-                    line_start = false;
                 }
                 if index + 1 < parts.len() {
                     self.write_code_run(xml, "\n", size, None, false, true)?;
-                    line_start = true;
                 }
             }
         }
@@ -2245,9 +2599,9 @@ impl State {
         let size = size.to_string();
         xml.empty("w:sz", &[("w:val", &size)])?;
         xml.empty("w:szCs", &[("w:val", &size)])?;
-        xml.empty("w:rtl", &[("w:val", "false")])?;
+        self.write_rtl(xml)?;
+        write_proofing_language(xml, self.active_style.as_ref())?;
         courier(xml)?;
-        xml.empty("w:shd", &[("w:fill", "F5F5F5")])?;
         xml.end("w:rPr")?;
         if is_break {
             xml.empty("w:br", &[])?;
@@ -2267,12 +2621,31 @@ impl State {
         if columns == 0 {
             return Ok(());
         }
-        let widths = column_widths(table);
+        let style_widths = self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.table_column_widths.clone());
+        let widths = column_widths(table).or(style_widths.as_deref());
+        if widths.is_some_and(|widths| widths.len() != columns) {
+            return Err(MarkdownConversionError::new(
+                "Table column widths must match the logical column count",
+            ));
+        }
         let table_width = widths
             .map(|widths| widths.iter().take(columns).sum::<u32>())
             .filter(|width| *width > 0)
             .unwrap_or(self.content_width);
-        let layout = if widths.is_some() { "fixed" } else { "autofit" };
+        let fixed_layout = matches!(
+            self.active_style
+                .as_ref()
+                .and_then(|style| style.table_layout),
+            Some(TableLayout::Fixed)
+        );
+        let layout = if widths.is_some() || fixed_layout {
+            "fixed"
+        } else {
+            "autofit"
+        };
         xml.start("w:tbl", &[])?;
         xml.start("w:tblPr", &[])?;
         let width = table_width.to_string();
@@ -2293,9 +2666,20 @@ impl State {
         }
         xml.end("w:tblBorders")?;
         xml.empty("w:tblLayout", &[("w:type", layout)])?;
+        let margins = self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.table_cell_margins.clone())
+            .unwrap_or_default();
         xml.start("w:tblCellMar", &[])?;
-        for side in ["w:top", "w:left", "w:bottom", "w:right"] {
-            xml.empty(side, &[("w:type", "dxa"), ("w:w", "100")])?;
+        for (side, value) in [
+            ("w:top", margins.top),
+            ("w:left", margins.left),
+            ("w:bottom", margins.bottom),
+            ("w:right", margins.right),
+        ] {
+            let value = js_number(value.unwrap_or(100.0));
+            xml.empty(side, &[("w:type", "dxa"), ("w:w", value.as_str())])?;
         }
         xml.end("w:tblCellMar")?;
         xml.end("w:tblPr")?;
@@ -2308,7 +2692,12 @@ impl State {
             xml.empty("w:gridCol", &[("w:w", &column)])?;
         }
         xml.end("w:tblGrid")?;
-        let split = table_row_split(table);
+        // `cantSplit: style.tableAllowRowSplit === false`.
+        let split = self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.table_allow_row_split)
+            != Some(false);
         for (header, cells) in &placed {
             self.write_placed_row(xml, cells, &table.align, *header, widths, split)?;
         }
@@ -2337,12 +2726,22 @@ impl State {
             xml.empty("w:tblHeader", &[("w:val", "false")])?;
         }
         xml.end("w:trPr")?;
-        let header_fill = "F2F2F2";
+        let header_fill = self
+            .active_style
+            .as_ref()
+            .and_then(|style| style.table_header_background.clone())
+            .unwrap_or_else(|| {
+                if self.report {
+                    "DDDDDD".to_string()
+                } else {
+                    "F2F2F2".to_string()
+                }
+            });
         for cell in cells {
             let jc = jc_val(align.get(cell.column).copied());
             xml.start("w:tc", &[])?;
             xml.start("w:tcPr", &[])?;
-            if let Some(widths) = widths {
+            if let Some(widths) = widths.filter(|_| cell.source.is_some()) {
                 let span = cell.column_span as usize;
                 let size = widths.iter().skip(cell.column).take(span).sum::<u32>();
                 if size > 0 {
@@ -2362,7 +2761,7 @@ impl State {
                 CellMerge::None => {}
             }
             if header {
-                xml.empty("w:shd", &[("w:fill", header_fill)])?;
+                xml.empty("w:shd", &[("w:fill", header_fill.as_str())])?;
             }
             xml.end("w:tcPr")?;
             if let Some(source) = cell.source.filter(|source| !source.blocks.is_empty()) {
@@ -2370,16 +2769,20 @@ impl State {
                     self.write_block(xml, block, None)?;
                 }
                 if matches!(source.blocks.last(), Some(Block::Table(_))) {
-                    self.write_cell_paragraph(xml, jc, &[], &Look::body())?;
+                    write_empty_paragraph(xml)?;
                 }
             } else {
                 let runs = cell
                     .source
                     .map(|source| source.children.as_slice())
                     .unwrap_or(&[]);
-                let mut look = Look::body();
+                let mut look = self.body_look();
                 look.force_bold = header;
-                self.write_cell_paragraph(xml, jc, runs, &look)?;
+                if cell.source.is_none() {
+                    write_empty_paragraph(xml)?;
+                } else {
+                    self.write_cell_paragraph(xml, jc, runs, &look)?;
+                }
             }
             xml.end("w:tc")?;
         }
@@ -2395,7 +2798,7 @@ impl State {
     ) -> Result<(), MarkdownConversionError> {
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
-        xml.empty("w:bidi", &[("w:val", "false")])?;
+        self.write_bidi(xml)?;
         xml.empty("w:jc", &[("w:val", jc)])?;
         xml.end("w:pPr")?;
         self.write_pending_ref(xml)?;
@@ -2409,6 +2812,11 @@ impl State {
         runs: &[Inline],
         look: &Look,
     ) -> Result<(), MarkdownConversionError> {
+        if runs.is_empty() {
+            // `renderInlineNodes` always emits at least one (empty) text run.
+            let empty = plain_inline(String::new());
+            return self.write_run(xml, &empty, look);
+        }
         for run in runs {
             self.write_run(xml, run, look)?;
         }
@@ -2461,7 +2869,13 @@ impl State {
                 if run.code {
                     self.write_inline_code(xml, &run.text, look)?;
                 } else {
-                    self.write_marked_run(xml, &run.text, run_marks(run, look))?;
+                    // `textRunFromNode` colours any linked text blue unless
+                    // the context forces a colour.
+                    let mut marks = run_marks(run, look);
+                    if look.color.is_none() {
+                        marks.color = Cow::Borrowed("0000FF");
+                    }
+                    self.write_marked_run(xml, &run.text, marks)?;
                 }
                 xml.end("w:hyperlink")
             }
@@ -2481,7 +2895,26 @@ impl State {
         text: &str,
         look: &Look,
     ) -> Result<(), MarkdownConversionError> {
-        let size = look.size.unwrap_or(20);
+        // `processInlineCode`: inlineCodeSize, then the context size, then
+        // paragraphSize - 2, then 20.
+        let style = self.active_style.as_ref();
+        let size = style
+            .and_then(|style| style.inline_code_size)
+            .or(look.size.filter(|_| look.code_context))
+            .or_else(|| {
+                style
+                    .and_then(|style| style.paragraph_size)
+                    .map(|size| size.saturating_sub(2))
+            })
+            .unwrap_or(20);
+        let color = style
+            .and_then(|style| style.inline_code_color.clone())
+            .map(Cow::Owned)
+            .unwrap_or(Cow::Borrowed("444444"));
+        let shade = style
+            .and_then(|style| style.inline_code_background.clone())
+            .map(Cow::Owned)
+            .unwrap_or(Cow::Borrowed("F5F5F5"));
         self.write_marked_run(
             xml,
             text,
@@ -2490,10 +2923,10 @@ impl State {
                 italic: false,
                 underline: false,
                 strike: false,
-                color: "444444",
-                size,
+                color,
+                size: Some(size),
                 courier: true,
-                shade: Some("F5F5F5"),
+                shade: Some(shade),
             },
         )
     }
@@ -2504,19 +2937,9 @@ impl State {
         text: &str,
         marks: Marks,
     ) -> Result<(), MarkdownConversionError> {
-        if !text.contains('\n') {
-            return self.write_marked_piece(xml, text, marks, false);
-        }
-        let parts: Vec<&str> = text.split('\n').collect();
-        for (index, part) in parts.iter().enumerate() {
-            if index > 0 {
-                self.write_marked_piece(xml, "\n", marks, true)?;
-            }
-            if !part.is_empty() {
-                self.write_marked_piece(xml, part, marks, false)?;
-            }
-        }
-        Ok(())
+        // The TypeScript renderer keeps `\n` inside `w:t`; only code blocks
+        // use `w:br`.
+        self.write_marked_piece(xml, text, marks, false)
     }
 
     fn write_marked_piece(
@@ -2542,19 +2965,22 @@ impl State {
         if marks.strike {
             xml.empty("w:strike", &[])?;
         }
-        xml.empty("w:color", &[("w:val", marks.color)])?;
-        let size = marks.size.to_string();
-        xml.empty("w:sz", &[("w:val", &size)])?;
-        xml.empty("w:szCs", &[("w:val", &size)])?;
-        let rtl = self.bidi_val();
-        xml.empty("w:rtl", &[("w:val", rtl)])?;
+        if !marks.color.is_empty() {
+            xml.empty("w:color", &[("w:val", &marks.color)])?;
+        }
+        if let Some(size) = marks.size {
+            let size = size.to_string();
+            xml.empty("w:sz", &[("w:val", &size)])?;
+            xml.empty("w:szCs", &[("w:val", &size)])?;
+        }
+        self.write_rtl(xml)?;
         write_proofing_language(xml, self.active_style.as_ref())?;
         if marks.courier {
             courier(xml)?;
         } else {
             self.write_run_font(xml)?;
         }
-        if let Some(fill) = marks.shade {
+        if let Some(fill) = &marks.shade {
             xml.empty("w:shd", &[("w:fill", fill)])?;
         }
         xml.end("w:rPr")?;
@@ -2582,10 +3008,10 @@ impl State {
         }
     }
 
+    /// Every `docx` `Bookmark` numbers itself from a fresh counter, so all
+    /// bookmarks carry id 1.
     fn next_bookmark_id(&mut self) -> String {
-        let id = self.bookmark_id.to_string();
-        self.bookmark_id = self.bookmark_id.saturating_add(1);
-        id
+        "1".to_string()
     }
 
     fn write_pending_ref(&mut self, xml: &mut Xml) -> Result<(), MarkdownConversionError> {
@@ -2596,7 +3022,6 @@ impl State {
         xml.start("w:r", &[])?;
         xml.start("w:rPr", &[])?;
         xml.empty("w:rStyle", &[("w:val", "FootnoteReference")])?;
-        xml.empty("w:vertAlign", &[("w:val", "superscript")])?;
         xml.end("w:rPr")?;
         xml.empty("w:footnoteRef", &[])?;
         xml.end("w:r")
@@ -2620,7 +3045,9 @@ impl State {
         } else {
             let instr = format!(" NOTEREF mdfootnote_{id} \\h \\f ");
             xml.start("w:fldSimple", &[("w:instr", instr.as_str())])?;
-            self.write_marked_run(xml, &id, plain_marks(24, "000000", false))?;
+            xml.start("w:r", &[])?;
+            xml.text_elem(&id)?;
+            xml.end("w:r")?;
             xml.end("w:fldSimple")
         }
     }
@@ -2633,7 +3060,6 @@ impl State {
         xml.start("w:r", &[])?;
         xml.start("w:rPr", &[])?;
         xml.empty("w:rStyle", &[("w:val", "FootnoteReference")])?;
-        xml.empty("w:vertAlign", &[("w:val", "superscript")])?;
         xml.end("w:rPr")?;
         xml.empty("w:footnoteReference", &[("w:id", id)])?;
         xml.end("w:r")
@@ -2663,21 +3089,12 @@ impl State {
         cached: &str,
         look: &Look,
     ) -> Result<(), MarkdownConversionError> {
+        // `SimpleField` caches its value in a bare `TextRun(string)`.
+        let _ = look;
         xml.start("w:fldSimple", &[("w:instr", instruction)])?;
-        self.write_marked_run(
-            xml,
-            cached,
-            Marks {
-                bold: look.force_bold,
-                italic: look.force_italic,
-                underline: false,
-                strike: false,
-                color: look.color.unwrap_or("000000"),
-                size: look.size.unwrap_or(24),
-                courier: false,
-                shade: None,
-            },
-        )?;
+        xml.start("w:r", &[])?;
+        xml.text_elem(cached)?;
+        xml.end("w:r")?;
         xml.end("w:fldSimple")
     }
 
@@ -2713,8 +3130,8 @@ impl State {
                 .unwrap_or(false),
             underline: false,
             strike: false,
-            color: "000000",
-            size,
+            color: Cow::Borrowed("000000"),
+            size: Some(size),
             courier: false,
             shade: None,
         }
@@ -2735,60 +3152,43 @@ impl State {
             .max(1)
     }
 
-    fn caption_spacing(&self) -> (u32, u32, u32) {
-        let Some(style) = &self.active_style else {
-            return (120, 240, 276);
-        };
-        let after = style.paragraph_spacing;
-        let line = (style.line_spacing * 240.0).round() as u32;
-        (after / 2, after, line.max(1))
+    fn caption_spacing(&self) -> (f64, f64, f64) {
+        let after = self.paragraph_spacing();
+        (after / 2.0, after, self.line_twips())
     }
 
-    fn write_image_block(
+    /// `processImage` output: a loaded image is centred with paragraph
+    /// spacing, a failed one is a red italic placeholder with no spacing. A
+    /// list marker adds numbering and left alignment to a loaded image.
+    fn write_image_paragraph(
         &mut self,
         xml: &mut Xml,
         image: &Image,
         quote: Option<&QuoteCtx>,
+        marker: Option<ImageMarker>,
     ) -> Result<(), MarkdownConversionError> {
-        if let Some(quote) = quote {
-            xml.start("w:p", &[])?;
-            xml.start("w:pPr", &[])?;
-            write_quote_frame(xml, quote)?;
-            spacing(xml, 240, 240, None, None)?;
-            indent(xml, 720 * quote.level)?;
-            xml.end("w:pPr")?;
-            self.write_pending_ref(xml)?;
-            self.write_image_value(xml, image)?;
-            return xml.end("w:p");
-        }
-        let (before, after, line) = self.body_spacing();
-        let align = self.body_align();
-        let bidi = self.bidi_val();
-        xml.start("w:p", &[])?;
-        xml.start("w:pPr", &[])?;
-        xml.empty("w:bidi", &[("w:val", bidi)])?;
-        spacing(xml, before, after, Some(line), None)?;
-        xml.empty("w:jc", &[("w:val", align)])?;
-        xml.end("w:pPr")?;
-        self.write_pending_ref(xml)?;
-        self.write_image_value(xml, image)?;
-        xml.end("w:p")
+        self.write_image_paragraph_with(xml, image, quote, marker, None)
     }
 
-    fn write_listed_image(
+    /// `placeholder` replaces the image placeholder text, for charts.
+    fn write_image_paragraph_with(
         &mut self,
         xml: &mut Xml,
         image: &Image,
-        level: u32,
-        num_id: u32,
         quote: Option<&QuoteCtx>,
-        continuation: bool,
+        marker: Option<ImageMarker>,
+        placeholder: Option<&str>,
     ) -> Result<(), MarkdownConversionError> {
+        let loaded = image
+            .bytes
+            .as_deref()
+            .is_some_and(|bytes| !bytes.is_empty());
+        let (before, after, _) = self.body_spacing();
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
-        if !continuation {
-            let ilvl = level.to_string();
-            let num = num_id.to_string();
+        if let Some(marker) = &marker {
+            let ilvl = marker.level.to_string();
+            let num = self.concrete_num_id(marker.num_key).to_string();
             xml.empty("w:pStyle", &[("w:val", "ListParagraph")])?;
             xml.start("w:numPr", &[])?;
             xml.empty("w:ilvl", &[("w:val", &ilvl)])?;
@@ -2796,20 +3196,42 @@ impl State {
             xml.end("w:numPr")?;
         }
         if let Some(quote) = quote {
-            write_quote_frame(xml, quote)?;
-            spacing(xml, 240, 240, None, None)?;
+            write_quote_frame_with(xml, quote, false)?;
+            self.write_bidi(xml)?;
+            spacing(xml, before, after, None, None)?;
             indent(xml, 720 * quote.level)?;
-        } else if continuation {
-            xml.empty("w:bidi", &[("w:val", "false")])?;
-            spacing(xml, 120, 120, None, None)?;
-            indent(xml, 720 * (level + 1))?;
         } else {
-            xml.empty("w:bidi", &[("w:val", "false")])?;
-            spacing(xml, 120, 120, None, None)?;
+            self.write_bidi(xml)?;
+            if loaded {
+                spacing(xml, before, after, None, None)?;
+            }
         }
+        let align = if loaded && marker.is_some() {
+            if self.is_rtl() {
+                "right"
+            } else {
+                "left"
+            }
+        } else if loaded {
+            quote.and_then(|quote| quote.alignment).unwrap_or("center")
+        } else {
+            "center"
+        };
+        xml.empty("w:jc", &[("w:val", align)])?;
         xml.end("w:pPr")?;
         self.write_pending_ref(xml)?;
-        self.write_image_value(xml, image)?;
+        if let Some(prefix) = marker
+            .as_ref()
+            .filter(|_| loaded)
+            .and_then(|marker| marker.task)
+        {
+            let size = self.list_look().size.unwrap_or(24);
+            self.write_marked_run(xml, prefix, plain_marks(size, "000000", false))?;
+        }
+        match placeholder {
+            Some(text) if !loaded => self.write_missing_image_text(xml, text)?,
+            _ => self.write_image_value(xml, image)?,
+        }
         xml.end("w:p")
     }
 
@@ -2821,6 +3243,18 @@ impl State {
         image: &Image,
     ) -> Result<(), MarkdownConversionError> {
         let Some(bytes) = image.bytes.as_deref().filter(|bytes| !bytes.is_empty()) else {
+            if matches!(
+                image.failure,
+                Some(
+                    crate::model::ImageFailure::EmbedLimit
+                        | crate::model::ImageFailure::RemoteBudget
+                )
+            ) {
+                return self.write_missing_image_text(
+                    xml,
+                    &format!("[Image could not be loaded: {}]", image.alt),
+                );
+            }
             return self.write_missing_image(xml, &image.alt);
         };
         let (hint_width, hint_height) = image_hints(&image.url);
@@ -2846,11 +3280,15 @@ impl State {
         alt: &str,
         title: Option<&str>,
     ) -> Result<(), MarkdownConversionError> {
+        if url == "!limit" {
+            xml.start("w:r", &[])?;
+            xml.text_elem(&format!("[Image limit reached: {alt}]"))?;
+            return xml.end("w:r");
+        }
         let (hint_width, hint_height) = image_hints(url);
         let (bytes, _, content_type) = match decode_image(url) {
             Ok(image) => image,
-            Err(err) if self.in_footnote => return Err(err),
-            Err(_) => return self.write_missing_image(xml, alt),
+            Err(_) => return self.write_inline_missing_image(xml, alt),
         };
         self.embed_raster(
             xml,
@@ -2894,10 +3332,21 @@ impl State {
                 self.media_types.push((extension, content_type));
             }
         }
-        let name = format!("image{}.{extension}", self.media.len() + 1);
+        // `docx` stores identical bytes once and shares the relationship.
+        let name = match self
+            .media
+            .iter()
+            .find(|(_, existing)| existing.as_slice() == bytes)
+        {
+            Some((path, _)) => path.trim_start_matches("word/media/").to_string(),
+            None => {
+                let name = format!("image{}.{extension}", self.media.len() + 1);
+                self.media
+                    .push((format!("word/media/{name}"), bytes.to_vec()));
+                name
+            }
+        };
         let token = format!("rId{{{name}}}");
-        self.media
-            .push((format!("word/media/{name}"), bytes.to_vec()));
         let (width, height) = display_pixels(
             sniffed.and_then(|raster| raster.width).or(known_width),
             sniffed.and_then(|raster| raster.height).or(known_height),
@@ -2916,8 +3365,8 @@ impl State {
         width: u32,
         height: u32,
     ) -> Result<(), MarkdownConversionError> {
-        self.drawing_id = self.drawing_id.saturating_add(1);
-        let id = self.drawing_id.to_string();
+        // Every `ImageRun` numbers its `docPr` from a fresh counter: always 1.
+        let id = "1".to_string();
         let name = drawing_name(alt, title);
         let cx = (u64::from(width) * EMU_PER_PIXEL).to_string();
         let cy = (u64::from(height) * EMU_PER_PIXEL).to_string();
@@ -2983,11 +3432,7 @@ impl State {
             )],
         )?;
         xml.start("pic:nvPicPr", &[])?;
-        let mut picture_name = vec![("id", "0"), ("name", name.as_str())];
-        if !alt.is_empty() {
-            picture_name.push(("descr", alt));
-        }
-        xml.empty("pic:cNvPr", &picture_name)?;
+        xml.empty("pic:cNvPr", &[("id", "0"), ("name", ""), ("descr", "")])?;
         xml.start("pic:cNvPicPr", &[])?;
         xml.empty(
             "a:picLocks",
@@ -2997,11 +3442,12 @@ impl State {
         xml.end("pic:nvPicPr")?;
         xml.start("pic:blipFill", &[])?;
         xml.empty("a:blip", &[("r:embed", embed), ("cstate", "none")])?;
+        xml.empty("a:srcRect", &[])?;
         xml.start("a:stretch", &[])?;
         xml.empty("a:fillRect", &[])?;
         xml.end("a:stretch")?;
         xml.end("pic:blipFill")?;
-        xml.start("pic:spPr", &[])?;
+        xml.start("pic:spPr", &[("bwMode", "auto")])?;
         xml.start("a:xfrm", &[])?;
         xml.empty("a:off", &[("x", "0"), ("y", "0")])?;
         xml.empty("a:ext", &[("cx", cx.as_str()), ("cy", cy.as_str())])?;
@@ -3024,20 +3470,41 @@ impl State {
         alt: &str,
     ) -> Result<(), MarkdownConversionError> {
         let text = image_placeholder(alt);
+        self.write_missing_image_text(xml, &text)
+    }
+
+    /// The red italic placeholder run shared by block images and charts.
+    fn write_missing_image_text(
+        &mut self,
+        xml: &mut Xml,
+        text: &str,
+    ) -> Result<(), MarkdownConversionError> {
         self.write_marked_run(
             xml,
-            &text,
+            text,
             Marks {
                 bold: false,
                 italic: true,
                 underline: false,
                 strike: false,
-                color: "FF0000",
-                size: self.caption_size(),
+                color: Cow::Borrowed("FF0000"),
+                size: None,
                 courier: false,
                 shade: None,
             },
         )
+    }
+
+    /// An inline image that failed is `new TextRun("[Image could not be
+    /// displayed: alt]")`: a run with no properties at all.
+    fn write_inline_missing_image(
+        &mut self,
+        xml: &mut Xml,
+        alt: &str,
+    ) -> Result<(), MarkdownConversionError> {
+        xml.start("w:r", &[])?;
+        xml.text_elem(&image_placeholder(alt))?;
+        xml.end("w:r")
     }
 
     fn write_page_break(&mut self, xml: &mut Xml) -> Result<(), MarkdownConversionError> {
@@ -3061,21 +3528,22 @@ impl State {
             italic: true,
             underline: false,
             strike: false,
-            color: "666666",
-            size: 24,
+            color: Cow::Borrowed("666666"),
+            size: None,
             courier: false,
             shade: None,
         };
+        let (before, after, _) = self.body_spacing();
         xml.start("w:p", &[])?;
         xml.start("w:pPr", &[])?;
         if let Some(quote) = quote {
             write_quote_frame(xml, quote)?;
-            spacing(xml, 240, 240, None, None)?;
+            self.write_bidi(xml)?;
+            spacing(xml, before, after, None, None)?;
             indent(xml, 720 * quote.level)?;
         } else {
-            xml.empty("w:bidi", &[("w:val", "false")])?;
-            spacing(xml, 240, 240, Some(276), None)?;
-            xml.empty("w:jc", &[("w:val", "left")])?;
+            self.write_bidi(xml)?;
+            spacing(xml, before, after, None, None)?;
         }
         xml.end("w:pPr")?;
         self.write_pending_ref(xml)?;
@@ -3128,10 +3596,7 @@ impl State {
     ) -> Result<Vec<u8>, MarkdownConversionError> {
         self.in_footnote = true;
         let mut xml = Xml::new()?;
-        xml.start(
-            "w:footnotes",
-            &[("xmlns:w", W_NS), ("xmlns:r", R_NS), ("xmlns:m", MATH_NS)],
-        )?;
+        xml.start("w:footnotes", &story_root_attrs())?;
         write_separator_footnote(&mut xml, "-1", "separator", "w:separator")?;
         write_separator_footnote(
             &mut xml,
@@ -3161,16 +3626,17 @@ impl State {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Marks {
     bold: bool,
     italic: bool,
     underline: bool,
     strike: bool,
-    color: &'static str,
-    size: u32,
+    /// Empty when the run carries no `w:color`.
+    color: Cow<'static, str>,
+    size: Option<u32>,
     courier: bool,
-    shade: Option<&'static str>,
+    shade: Option<Cow<'static, str>>,
 }
 
 fn plain_marks(size: u32, color: &'static str, bold: bool) -> Marks {
@@ -3179,8 +3645,8 @@ fn plain_marks(size: u32, color: &'static str, bold: bool) -> Marks {
         italic: false,
         underline: false,
         strike: false,
-        color,
-        size,
+        color: Cow::Borrowed(color),
+        size: Some(size),
         courier: false,
         shade: None,
     }
@@ -3193,12 +3659,12 @@ fn run_marks(run: &Inline, look: &Look) -> Marks {
         italic: look.force_italic || run.italic,
         underline: linked || run.underline,
         strike: run.strike,
-        color: if linked {
+        color: Cow::Borrowed(if linked {
             "0000FF"
         } else {
             look.color.unwrap_or("000000")
-        },
-        size: look.size.unwrap_or(24),
+        }),
+        size: Some(look.size.unwrap_or(24)),
         courier: false,
         shade: None,
     }
@@ -3269,46 +3735,62 @@ fn callout_border_color(callout: Option<&CalloutKind>) -> &'static str {
     }
 }
 
-fn quote_border(quote: Option<&QuoteCtx>) -> &'static str {
-    callout_border_color(quote.and_then(|quote| quote.callout.as_ref()))
+/// `blockquoteParagraphStyle`: left border, callout shading and alignment.
+fn write_quote_frame(xml: &mut Xml, quote: &QuoteCtx) -> Result<(), MarkdownConversionError> {
+    write_quote_frame_with(xml, quote, true)
 }
 
-fn write_quote_frame(xml: &mut Xml, quote: &QuoteCtx) -> Result<(), MarkdownConversionError> {
+fn write_quote_frame_with(
+    xml: &mut Xml,
+    quote: &QuoteCtx,
+    with_alignment: bool,
+) -> Result<(), MarkdownConversionError> {
     xml.start("w:pBdr", &[])?;
     xml.empty(
         "w:left",
         &[
             ("w:val", "single"),
-            ("w:color", callout_border_color(quote.callout.as_ref())),
+            ("w:color", quote.border.as_str()),
             ("w:sz", "3"),
         ],
     )?;
     xml.end("w:pBdr")?;
-    if let Some(fill) = callout_fill(quote.callout.as_ref()) {
+    if let Some(fill) = &quote.fill {
         xml.empty("w:shd", &[("w:fill", fill)])?;
     }
-    xml.empty("w:bidi", &[("w:val", "false")])
+    if with_alignment {
+        if let Some(align) = quote.alignment {
+            xml.empty("w:jc", &[("w:val", align)])?;
+        }
+    }
+    Ok(())
+}
+
+/// `new Paragraph({})`: the fallback for a section with nothing to render.
+fn write_empty_paragraph(xml: &mut Xml) -> Result<(), MarkdownConversionError> {
+    xml.start("w:p", &[])?;
+    xml.end("w:p")
 }
 
 /// Blank paragraph between back-to-back code blocks so their borders stay apart.
 fn write_code_spacer(xml: &mut Xml) -> Result<(), MarkdownConversionError> {
     xml.start("w:p", &[])?;
     xml.start("w:pPr", &[])?;
-    spacing(xml, 0, 0, None, None)?;
+    spacing(xml, 0.0, 0.0, None, None)?;
     xml.end("w:pPr")?;
     xml.end("w:p")
 }
 
 fn spacing(
     xml: &mut Xml,
-    before: u32,
-    after: u32,
-    line: Option<u32>,
+    before: f64,
+    after: f64,
+    line: Option<f64>,
     line_rule: Option<&str>,
 ) -> Result<(), MarkdownConversionError> {
-    let before = before.to_string();
-    let after = after.to_string();
-    let line_value = line.map(|value| value.to_string());
+    let before = js_number(before);
+    let after = js_number(after);
+    let line_value = line.map(js_number);
     let mut attrs = vec![("w:before", before.as_str()), ("w:after", after.as_str())];
     if let Some(line_value) = line_value.as_deref() {
         attrs.push(("w:line", line_value));
@@ -3490,17 +3972,16 @@ fn column_widths(table: &Table) -> Option<&[u32]> {
     table.column_widths.as_deref()
 }
 
-/// `true` keeps the historical `w:cantSplit w:val="false"`.
-fn table_row_split(_table: &Table) -> bool {
-    true
-}
-
+/// `"\u00A0".repeat(line.match(/^\s*/)[0].length) + line.slice(...)`: every
+/// leading JavaScript whitespace character becomes one no-break space.
 fn leading_nbsp(line: &str) -> String {
-    let lead = line
+    let lead: usize = line
         .chars()
-        .take_while(|ch| *ch == ' ' || *ch == '\t')
-        .count();
-    let mut out = "\u{00A0}".repeat(lead);
+        .take_while(|ch| crate::autolink::js_whitespace(*ch))
+        .map(char::len_utf8)
+        .sum();
+    let count = line[..lead].chars().count();
+    let mut out = "\u{00A0}".repeat(count);
     out.push_str(&line[lead..]);
     out
 }
@@ -3512,11 +3993,17 @@ enum LinkKind<'a> {
 }
 
 fn link_kind(link: Option<&str>) -> LinkKind<'_> {
-    let Some(link) = link else {
+    // An empty `url` is falsy in `renderInlineNodes`: plain text.
+    let Some(link) = link.filter(|link| !link.is_empty()) else {
         return LinkKind::Plain;
     };
     if let Some(fragment) = link.strip_prefix('#') {
         return LinkKind::Anchor(percent_decode(fragment));
+    }
+    // Match JavaScript's URL parser before accepting a safe protocol.
+    let base = url::Url::parse("https://relative-link.invalid/").expect("valid base URL");
+    if base.join(link).is_err() {
+        return LinkKind::Plain;
     }
     match scheme(link) {
         Some(scheme) if is_safe_scheme(scheme) => LinkKind::External(link),
@@ -3580,10 +4067,9 @@ fn hex_val(byte: u8) -> Option<u8> {
     }
 }
 
+/// Every `ExternalHyperlink` gets its own relationship, even for a repeated
+/// target.
 fn remember_link(links: &mut Vec<String>, target: &str, first_id: usize) -> String {
-    if let Some(index) = links.iter().position(|link| link == target) {
-        return format!("rId{}", index + first_id);
-    }
     links.push(target.to_string());
     format!("rId{}", links.len() + first_id - 1)
 }
@@ -3665,20 +4151,41 @@ fn write_separator_footnote(
     )?;
     xml.end("w:pPr")?;
     xml.start("w:r", &[])?;
+    xml.start("w:rPr", &[])?;
+    xml.empty("w:rStyle", &[("w:val", "FootnoteReference")])?;
+    xml.end("w:rPr")?;
+    xml.empty("w:footnoteRef", &[])?;
+    xml.end("w:r")?;
+    xml.start("w:r", &[])?;
     xml.empty(mark, &[])?;
     xml.end("w:r")?;
     xml.end("w:p")?;
     xml.end("w:footnote")
 }
 
+/// Image extensions the `docx` library always declares, whether or not the
+/// package has media.
+const DEFAULT_MEDIA_TYPES: [(&str, &str); 6] = [
+    ("png", "image/png"),
+    ("jpeg", "image/jpeg"),
+    ("jpg", "image/jpeg"),
+    ("bmp", "image/bmp"),
+    ("gif", "image/gif"),
+    ("svg", "image/svg+xml"),
+];
+
 fn write_content_types(
-    has_footnotes: bool,
     media_types: &[(&str, &str)],
     stories: &[StoryPart],
-    has_settings: bool,
 ) -> Result<Vec<u8>, MarkdownConversionError> {
     let mut xml = Xml::new()?;
     xml.start("Types", &[("xmlns", CT_NS)])?;
+    for (extension, content_type) in DEFAULT_MEDIA_TYPES {
+        xml.empty(
+            "Default",
+            &[("Extension", extension), ("ContentType", content_type)],
+        )?;
+    }
     xml.empty(
         "Default",
         &[
@@ -3693,7 +4200,23 @@ fn write_content_types(
         "Default",
         &[("Extension", "xml"), ("ContentType", "application/xml")],
     )?;
+    xml.empty(
+        "Default",
+        &[
+            ("Extension", "odttf"),
+            (
+                "ContentType",
+                "application/vnd.openxmlformats-officedocument.obfuscatedFont",
+            ),
+        ],
+    )?;
     for (extension, content_type) in media_types {
+        if DEFAULT_MEDIA_TYPES
+            .iter()
+            .any(|(known, _)| known == extension)
+        {
+            continue;
+        }
         xml.empty(
             "Default",
             &[("Extension", extension), ("ContentType", content_type)],
@@ -3729,28 +4252,29 @@ fn write_content_types(
             ),
         ],
     )?;
-    if has_footnotes {
+    for (part_name, content_type) in [
+        (
+            "/word/footnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+        ),
+        (
+            "/word/settings.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+        ),
+        (
+            "/word/comments.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        ),
+        (
+            "/word/fontTable.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml",
+        ),
+        ("/docProps/app.xml", APP_CONTENT_TYPE),
+        ("/docProps/custom.xml", CUSTOM_CONTENT_TYPE),
+    ] {
         xml.empty(
             "Override",
-            &[
-                ("PartName", "/word/footnotes.xml"),
-                (
-                    "ContentType",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
-                ),
-            ],
-        )?;
-    }
-    if has_settings {
-        xml.empty(
-            "Override",
-            &[
-                ("PartName", "/word/settings.xml"),
-                (
-                    "ContentType",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
-                ),
-            ],
+            &[("PartName", part_name), ("ContentType", content_type)],
         )?;
     }
     for story in stories {
@@ -3794,6 +4318,22 @@ fn write_package_rels() -> Result<Vec<u8>, MarkdownConversionError> {
             ("Id", "rId2"),
             ("Type", CORE_REL),
             ("Target", "docProps/core.xml"),
+        ],
+    )?;
+    xml.empty(
+        "Relationship",
+        &[
+            ("Id", "rId3"),
+            ("Type", APP_REL),
+            ("Target", "docProps/app.xml"),
+        ],
+    )?;
+    xml.empty(
+        "Relationship",
+        &[
+            ("Id", "rId4"),
+            ("Type", CUSTOM_REL),
+            ("Target", "docProps/custom.xml"),
         ],
     )?;
     xml.end("Relationships")?;
@@ -4304,20 +4844,19 @@ fn write_document_rels(
             ],
         )?;
     }
-    if has_footnotes {
-        let id = format!("rId{}", links.len() + 3);
-        xml.empty(
-            "Relationship",
-            &[
-                ("Id", &id),
-                (
-                    "Type",
-                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes",
-                ),
-                ("Target", "footnotes.xml"),
-            ],
-        )?;
-    }
+    debug_assert!(has_footnotes, "footnotes.xml is always written");
+    let id = format!("rId{}", links.len() + 3);
+    xml.empty(
+        "Relationship",
+        &[
+            ("Id", &id),
+            (
+                "Type",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes",
+            ),
+            ("Target", "footnotes.xml"),
+        ],
+    )?;
     for story in stories {
         xml.empty(
             "Relationship",
@@ -4343,6 +4882,26 @@ fn write_document_rels(
             ("Target", "settings.xml"),
         ],
     )?;
+    let base = 3 + links.len() + usize::from(has_footnotes) + stories.len();
+    for (offset, (rel_type, target)) in [
+        (
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+            "comments.xml",
+        ),
+        (
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable",
+            "fontTable.xml",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("rId{}", base + 1 + offset);
+        xml.empty(
+            "Relationship",
+            &[("Id", &id), ("Type", rel_type), ("Target", target)],
+        )?;
+    }
     xml.end("Relationships")?;
     Ok(xml.finish())
 }
@@ -4350,17 +4909,6 @@ fn write_document_rels(
 fn write_footnote_rels(links: &[String]) -> Result<Vec<u8>, MarkdownConversionError> {
     let mut xml = Xml::new()?;
     xml.start("Relationships", &[("xmlns", REL_NS)])?;
-    xml.empty(
-        "Relationship",
-        &[
-            ("Id", "rId1"),
-            (
-                "Type",
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering",
-            ),
-            ("Target", "numbering.xml"),
-        ],
-    )?;
     for (index, target) in links.iter().enumerate() {
         let id = format!("rId{}", index + 2);
         xml.empty(
@@ -4381,34 +4929,41 @@ fn write_footnote_rels(links: &[String]) -> Result<Vec<u8>, MarkdownConversionEr
 }
 
 fn write_styles(style: Option<&ResolvedStyle>) -> Result<Vec<u8>, MarkdownConversionError> {
+    let default_style = ResolvedStyle::default();
+    let style = style.unwrap_or(&default_style);
+    let rtl = style.direction == Direction::Rtl;
+    let font = style
+        .font_family
+        .as_deref()
+        .filter(|font| !font.trim().is_empty());
     let mut xml = Xml::new()?;
-    xml.start("w:styles", &[("xmlns:w", W_NS)])?;
+    xml.start(
+        "w:styles",
+        &[
+            ("xmlns:w", W_NS),
+            ("xmlns:mc", MC_NS),
+            ("xmlns:w14", W14_NS),
+            ("xmlns:w15", W15_NS),
+            ("mc:Ignorable", "w14 w15"),
+        ],
+    )?;
     xml.start("w:docDefaults", &[])?;
     xml.start("w:rPrDefault", &[])?;
-    xml.start("w:rPr", &[])?;
-    xml.empty("w:sz", &[("w:val", "24")])?;
-    xml.empty("w:szCs", &[("w:val", "24")])?;
-    write_proofing_language(&mut xml, style)?;
-    xml.end("w:rPr")?;
+    if style.language.is_some() || rtl {
+        xml.start("w:rPr", &[])?;
+        if rtl {
+            xml.empty("w:rtl", &[])?;
+        }
+        write_proofing_language(&mut xml, Some(style))?;
+        xml.end("w:rPr")?;
+    }
     xml.end("w:rPrDefault")?;
     xml.start("w:pPrDefault", &[])?;
-    xml.start("w:pPr", &[])?;
-    xml.empty(
-        "w:spacing",
-        &[("w:after", "0"), ("w:line", "276"), ("w:lineRule", "auto")],
-    )?;
-    xml.end("w:pPr")?;
     xml.end("w:pPrDefault")?;
     xml.end("w:docDefaults")?;
-    write_style(&mut xml, "Normal", "Normal", true, None)?;
-    write_style(
-        &mut xml,
-        "ListParagraph",
-        "List Paragraph",
-        false,
-        Some("Normal"),
-    )?;
-    let spacing = [
+
+    // The `docx` library's built-in styles, customised by `buildDefaultStyles`.
+    let heading_spacing = [
         (360, 240),
         (320, 160),
         (280, 120),
@@ -4416,71 +4971,254 @@ fn write_styles(style: Option<&ResolvedStyle>) -> Result<Vec<u8>, MarkdownConver
         (220, 100),
         (200, 100),
     ];
-    for level in 1..=6 {
-        let size = heading_size(level);
-        let (before, after) = spacing[usize::from(level - 1)];
-        let named = format!("Heading{level}");
-        let display = format!("Heading {level}");
-        let numeric = level.to_string();
-        write_heading_style(
+    open_style(&mut xml, &StyleHead::heading("Title", "Title"))?;
+    xml.start("w:pPr", &[])?;
+    let title_line = js_number(style.line_spacing * 240.0);
+    xml.empty(
+        "w:spacing",
+        &[("w:after", "240"), ("w:line", title_line.as_str())],
+    )?;
+    xml.empty("w:jc", &[("w:val", "center")])?;
+    xml.end("w:pPr")?;
+    write_style_run(
+        &mut xml,
+        true,
+        Some("000000"),
+        Some(style.title_size),
+        font,
+        style,
+        rtl,
+    )?;
+    xml.end("w:style")?;
+    for level in 1..=6u8 {
+        let id = format!("Heading{level}");
+        let name = format!("Heading {level}");
+        open_style(&mut xml, &StyleHead::heading(&id, &name))?;
+        let (before, after) = heading_spacing[usize::from(level - 1)];
+        xml.start("w:pPr", &[])?;
+        spacing(&mut xml, f64::from(before), f64::from(after), None, None)?;
+        let outline = level.to_string();
+        xml.empty("w:outlineLvl", &[("w:val", &outline)])?;
+        xml.end("w:pPr")?;
+        write_style_run(
             &mut xml,
-            &named,
-            &display,
-            size,
-            (before, after),
-            level - 1,
+            true,
+            Some("000000"),
+            Some(style.heading_run_size(level)),
+            font,
             style,
+            rtl,
         )?;
-        write_heading_style(
-            &mut xml,
-            &numeric,
-            &display,
-            size,
-            (before, after),
-            level - 1,
-            style,
-        )?;
+        xml.end("w:style")?;
     }
-    write_footnote_reference_style(&mut xml)?;
-    write_toc_heading_style(&mut xml)?;
-    write_style(&mut xml, "Caption", "Caption", false, Some("Normal"))?;
+    open_style(&mut xml, &StyleHead::heading("Strong", "Strong"))?;
+    write_style_run(&mut xml, true, None, None, font, style, rtl)?;
+    xml.end("w:style")?;
+    open_style(
+        &mut xml,
+        &StyleHead {
+            kind: "paragraph",
+            id: "ListParagraph",
+            name: "List Paragraph",
+            based_on: Some("Normal"),
+            quick_format: true,
+            ..StyleHead::default()
+        },
+    )?;
+    xml.end("w:style")?;
+    open_style(
+        &mut xml,
+        &StyleHead {
+            kind: "character",
+            id: "Hyperlink",
+            name: "Hyperlink",
+            based_on: Some("DefaultParagraphFont"),
+            ui_priority: Some("99"),
+            unhide_when_used: true,
+            ..StyleHead::default()
+        },
+    )?;
+    xml.start("w:rPr", &[])?;
+    xml.empty("w:color", &[("w:val", "0563C1")])?;
+    xml.empty("w:u", &[("w:val", "single")])?;
+    xml.end("w:rPr")?;
+    xml.end("w:style")?;
+    open_style(
+        &mut xml,
+        &StyleHead {
+            kind: "character",
+            id: "FootnoteReference",
+            name: "footnote reference",
+            based_on: Some("DefaultParagraphFont"),
+            ui_priority: Some("99"),
+            semi_hidden: true,
+            unhide_when_used: true,
+            ..StyleHead::default()
+        },
+    )?;
+    xml.start("w:rPr", &[])?;
+    xml.empty("w:vertAlign", &[("w:val", "superscript")])?;
+    xml.end("w:rPr")?;
+    xml.end("w:style")?;
+    open_style(
+        &mut xml,
+        &StyleHead {
+            kind: "paragraph",
+            id: "FootnoteText",
+            name: "footnote text",
+            based_on: Some("Normal"),
+            link: Some("FootnoteTextChar"),
+            ui_priority: Some("99"),
+            semi_hidden: true,
+            unhide_when_used: true,
+            ..StyleHead::default()
+        },
+    )?;
+    xml.start("w:pPr", &[])?;
+    xml.empty(
+        "w:spacing",
+        &[("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")],
+    )?;
+    xml.end("w:pPr")?;
+    xml.start("w:rPr", &[])?;
+    xml.empty("w:sz", &[("w:val", "20")])?;
+    xml.empty("w:szCs", &[("w:val", "20")])?;
+    xml.end("w:rPr")?;
+    xml.end("w:style")?;
+    open_style(
+        &mut xml,
+        &StyleHead {
+            kind: "character",
+            id: "FootnoteTextChar",
+            name: "Footnote Text Char",
+            based_on: Some("DefaultParagraphFont"),
+            link: Some("FootnoteText"),
+            ui_priority: Some("99"),
+            semi_hidden: true,
+            unhide_when_used: true,
+            ..StyleHead::default()
+        },
+    )?;
+    xml.start("w:rPr", &[])?;
+    xml.empty("w:sz", &[("w:val", "20")])?;
+    xml.empty("w:szCs", &[("w:val", "20")])?;
+    xml.end("w:rPr")?;
+    xml.end("w:style")?;
     xml.end("w:styles")?;
     Ok(xml.finish())
 }
 
-fn write_style(
-    xml: &mut Xml,
-    id: &str,
-    name: &str,
-    default: bool,
-    based_on: Option<&str>,
-) -> Result<(), MarkdownConversionError> {
-    let mut attrs = vec![("w:type", "paragraph"), ("w:styleId", id)];
-    if default {
-        attrs.push(("w:default", "1"));
-    }
-    xml.start("w:style", &attrs)?;
-    xml.empty("w:name", &[("w:val", name)])?;
-    if let Some(based_on) = based_on {
-        xml.empty("w:basedOn", &[("w:val", based_on)])?;
-    }
-    xml.empty("w:qFormat", &[])?;
-    xml.end("w:style")
+/// The leading children of a `w:style`, in the order the `docx` library writes them.
+#[derive(Default)]
+struct StyleHead<'a> {
+    kind: &'a str,
+    id: &'a str,
+    name: &'a str,
+    based_on: Option<&'a str>,
+    next: Option<&'a str>,
+    link: Option<&'a str>,
+    ui_priority: Option<&'a str>,
+    semi_hidden: bool,
+    unhide_when_used: bool,
+    quick_format: bool,
 }
 
-fn write_toc_heading_style(xml: &mut Xml) -> Result<(), MarkdownConversionError> {
-    xml.start(
-        "w:style",
-        &[("w:type", "paragraph"), ("w:styleId", "TOCHeading")],
-    )?;
-    xml.empty("w:name", &[("w:val", "TOC Heading")])?;
-    xml.empty("w:basedOn", &[("w:val", "Normal")])?;
-    xml.empty("w:qFormat", &[])?;
-    xml.start("w:pPr", &[])?;
-    xml.empty("w:spacing", &[("w:after", "240")])?;
-    xml.empty("w:jc", &[("w:val", "center")])?;
-    xml.end("w:pPr")?;
-    xml.end("w:style")
+impl<'a> StyleHead<'a> {
+    /// `HeadingStyle` in `docx`: based on Normal, next Normal, quick format.
+    fn heading(id: &'a str, name: &'a str) -> Self {
+        Self {
+            kind: "paragraph",
+            id,
+            name,
+            based_on: Some("Normal"),
+            next: Some("Normal"),
+            quick_format: true,
+            ..Self::default()
+        }
+    }
+}
+
+fn open_style(xml: &mut Xml, head: &StyleHead<'_>) -> Result<(), MarkdownConversionError> {
+    xml.start("w:style", &[("w:type", head.kind), ("w:styleId", head.id)])?;
+    xml.empty("w:name", &[("w:val", head.name)])?;
+    if let Some(based_on) = head.based_on {
+        xml.empty("w:basedOn", &[("w:val", based_on)])?;
+    }
+    if let Some(next) = head.next {
+        xml.empty("w:next", &[("w:val", next)])?;
+    }
+    if let Some(link) = head.link {
+        xml.empty("w:link", &[("w:val", link)])?;
+    }
+    if let Some(priority) = head.ui_priority {
+        xml.empty("w:uiPriority", &[("w:val", priority)])?;
+    }
+    if head.semi_hidden {
+        xml.empty("w:semiHidden", &[])?;
+    }
+    if head.unhide_when_used {
+        xml.empty("w:unhideWhenUsed", &[])?;
+    }
+    if head.quick_format {
+        xml.empty("w:qFormat", &[])?;
+    }
+    Ok(())
+}
+
+/// Run properties of a built-in style. Nothing is written when every value is off.
+fn write_style_run(
+    xml: &mut Xml,
+    bold: bool,
+    color: Option<&str>,
+    size: Option<u32>,
+    font: Option<&str>,
+    style: &ResolvedStyle,
+    rtl: bool,
+) -> Result<(), MarkdownConversionError> {
+    let has_language = style.language.as_deref().is_some_and(|tag| !tag.is_empty());
+    if !bold && color.is_none() && size.is_none() && font.is_none() && !has_language && !rtl {
+        return Ok(());
+    }
+    xml.start("w:rPr", &[])?;
+    if let Some(font) = font {
+        xml.empty(
+            "w:rFonts",
+            &[
+                ("w:ascii", font),
+                ("w:cs", font),
+                ("w:eastAsia", font),
+                ("w:hAnsi", font),
+            ],
+        )?;
+    }
+    if bold {
+        xml.empty("w:b", &[])?;
+        xml.empty("w:bCs", &[])?;
+    }
+    if let Some(color) = color {
+        xml.empty("w:color", &[("w:val", color)])?;
+    }
+    if let Some(size) = size {
+        let size = size.to_string();
+        xml.empty("w:sz", &[("w:val", &size)])?;
+        xml.empty("w:szCs", &[("w:val", &size)])?;
+    }
+    if rtl {
+        xml.empty("w:rtl", &[])?;
+    }
+    write_proofing_language(xml, Some(style))?;
+    xml.end("w:rPr")
+}
+
+/// Format a number the way JavaScript's `String(value)` does for the values
+/// the converter produces: integers without a fraction, otherwise the shortest
+/// round-trip decimal.
+fn js_number(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < 1e21 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
 }
 
 struct TocEntryStyle {
@@ -4549,11 +5287,22 @@ fn collect_headings(blocks: &[Block], headings: &mut Vec<TocHeading>) {
 
 fn write_settings(update_fields: bool) -> Result<Vec<u8>, MarkdownConversionError> {
     let mut xml = Xml::new()?;
-    xml.start("w:settings", &[("xmlns:w", W_NS)])?;
+    xml.start("w:settings", &story_root_attrs())?;
+    xml.empty("w:displayBackgroundShape", &[])?;
     xml.empty("w:evenAndOddHeaders", &[("w:val", "false")])?;
     if update_fields {
         xml.empty("w:updateFields", &[])?;
     }
+    xml.start("w:compat", &[])?;
+    xml.empty(
+        "w:compatSetting",
+        &[
+            ("w:name", "compatibilityMode"),
+            ("w:uri", "http://schemas.microsoft.com/office/word"),
+            ("w:val", "15"),
+        ],
+    )?;
+    xml.end("w:compat")?;
     xml.end("w:settings")?;
     Ok(xml.finish())
 }
@@ -4616,50 +5365,6 @@ fn write_page_number_fields(xml: &mut Xml, display: &str) -> Result<(), Markdown
     Ok(())
 }
 
-fn write_footnote_reference_style(xml: &mut Xml) -> Result<(), MarkdownConversionError> {
-    xml.start(
-        "w:style",
-        &[("w:type", "character"), ("w:styleId", "FootnoteReference")],
-    )?;
-    xml.empty("w:name", &[("w:val", "footnote reference")])?;
-    xml.start("w:rPr", &[])?;
-    xml.empty("w:vertAlign", &[("w:val", "superscript")])?;
-    xml.end("w:rPr")?;
-    xml.end("w:style")
-}
-
-fn write_heading_style(
-    xml: &mut Xml,
-    id: &str,
-    name: &str,
-    size: u32,
-    spacing_values: (u32, u32),
-    outline: u8,
-    style: Option<&ResolvedStyle>,
-) -> Result<(), MarkdownConversionError> {
-    let (before, after) = spacing_values;
-    xml.start("w:style", &[("w:type", "paragraph"), ("w:styleId", id)])?;
-    xml.empty("w:name", &[("w:val", name)])?;
-    xml.empty("w:basedOn", &[("w:val", "Normal")])?;
-    xml.empty("w:next", &[("w:val", "Normal")])?;
-    xml.empty("w:qFormat", &[])?;
-    xml.start("w:pPr", &[])?;
-    spacing(xml, before, after, None, None)?;
-    let outline = outline.to_string();
-    xml.empty("w:outlineLvl", &[("w:val", &outline)])?;
-    xml.end("w:pPr")?;
-    xml.start("w:rPr", &[])?;
-    xml.empty("w:b", &[])?;
-    xml.empty("w:bCs", &[])?;
-    xml.empty("w:color", &[("w:val", "000000")])?;
-    let size = size.to_string();
-    xml.empty("w:sz", &[("w:val", &size)])?;
-    xml.empty("w:szCs", &[("w:val", &size)])?;
-    write_proofing_language(xml, style)?;
-    xml.end("w:rPr")?;
-    xml.end("w:style")
-}
-
 /// `w:lang` from the style the parser already resolved.
 ///
 /// East Asian tags add `w:eastAsia`. Right-to-left adds `w:bidi`. A style with
@@ -4685,19 +5390,30 @@ fn write_proofing_language(
     xml.empty("w:lang", &attrs)
 }
 
-fn write_numbering(starts: &[(u32, u64)]) -> Result<Vec<u8>, MarkdownConversionError> {
+/// Abstract definitions exist for every ordered list sequence. Concrete
+/// `w:num` entries exist only for sequences a paragraph used, numbered in
+/// order of first use, as `docx` creates them lazily.
+fn write_numbering(
+    starts: &[(u32, u64)],
+    order: &[u32],
+) -> Result<Vec<u8>, MarkdownConversionError> {
     let mut ordered = starts.to_vec();
     ordered.sort_by_key(|(sequence, _)| *sequence);
     let mut xml = Xml::new()?;
-    xml.start("w:numbering", &[("xmlns:w", W_NS)])?;
+    xml.start("w:numbering", &story_root_attrs())?;
     write_abstract(&mut xml, 1, true, 1)?;
     for (sequence, start) in &ordered {
         write_abstract(&mut xml, sequence.saturating_add(1), false, *start)?;
     }
     write_num(&mut xml, 1, 1, 1)?;
-    for (sequence, start) in &ordered {
-        let id = sequence.saturating_add(1);
-        write_num(&mut xml, id, id, *start)?;
+    for (index, key) in order.iter().enumerate() {
+        let start = ordered
+            .iter()
+            .find(|(sequence, _)| sequence.saturating_add(1) == *key)
+            .map(|(_, start)| *start)
+            .unwrap_or(1);
+        let num_id = u32::try_from(index).unwrap_or(u32::MAX).saturating_add(2);
+        write_num(&mut xml, num_id, *key, start)?;
     }
     xml.end("w:numbering")?;
     Ok(xml.finish())
@@ -4710,7 +5426,13 @@ fn write_abstract(
     start: u64,
 ) -> Result<(), MarkdownConversionError> {
     let id = id.to_string();
-    xml.start("w:abstractNum", &[("w:abstractNumId", &id)])?;
+    xml.start(
+        "w:abstractNum",
+        &[
+            ("w:abstractNumId", &id),
+            ("w15:restartNumberingAfterBreak", "0"),
+        ],
+    )?;
     xml.empty("w:multiLevelType", &[("w:val", "hybridMultilevel")])?;
     for (level, bullet_text) in BULLETS.iter().enumerate() {
         let ilvl = level.to_string();
@@ -4722,7 +5444,7 @@ fn write_abstract(
         } else {
             format!("%{}.", level + 1)
         };
-        xml.start("w:lvl", &[("w:ilvl", &ilvl)])?;
+        xml.start("w:lvl", &[("w:ilvl", &ilvl), ("w15:tentative", "1")])?;
         xml.empty("w:start", &[("w:val", &start_value)])?;
         xml.empty(
             "w:numFmt",
@@ -4746,7 +5468,8 @@ fn write_num(
 ) -> Result<(), MarkdownConversionError> {
     let num_id = num_id.to_string();
     let abstract_id = abstract_id.to_string();
-    let start = start.to_string();
+    // `docx` writes `start || 1` into the override.
+    let start = if start == 0 { 1 } else { start }.to_string();
     xml.start("w:num", &[("w:numId", &num_id)])?;
     xml.empty("w:abstractNumId", &[("w:val", &abstract_id)])?;
     xml.start("w:lvlOverride", &[("w:ilvl", "0")])?;
@@ -4936,11 +5659,7 @@ fn emit_omml(xml: &mut Xml, omml: &str) -> Result<(), MarkdownConversionError> {
 }
 
 fn image_placeholder(alt: &str) -> String {
-    if alt.is_empty() {
-        "[Image could not be displayed]".to_string()
-    } else {
-        format!("[Image could not be displayed: {alt}]")
-    }
+    format!("[Image could not be displayed: {alt}]")
 }
 
 fn extension_for_content_type(content_type: &str) -> &'static str {
@@ -5484,11 +6203,13 @@ mod tests {
             }),
             "word/styles.xml",
         );
+        // The `docx` defaults: no `Normal` definition, headings 1 to 6.
         for id in [
-            "Normal", "Heading1", "Heading2", "Heading3", "Heading4", "Heading5", "Heading6",
+            "Title", "Heading1", "Heading2", "Heading3", "Heading4", "Heading5", "Heading6",
         ] {
             assert!(styles.contains(&format!("w:styleId=\"{id}\"")), "{id}");
         }
+        assert!(!styles.contains("w:styleId=\"Normal\""));
     }
 
     #[test]
@@ -5747,9 +6468,11 @@ mod tests {
         assert!(core.contains("Un-named"));
         assert!(core.contains("dcterms:created"));
         assert!(core.contains("dcterms:modified"));
-        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
-        assert!(archive.by_name("docProps/app.xml").is_err());
-        assert!(archive.by_name("docProps/custom.xml").is_err());
+        // Empty extended and custom property parts are always present.
+        let app = part(&bytes, "docProps/app.xml");
+        assert!(app.contains("<Properties") && !app.contains("<Company"));
+        let custom = part(&bytes, "docProps/custom.xml");
+        assert!(custom.contains("<Properties") && !custom.contains("<property"));
     }
 
     #[test]

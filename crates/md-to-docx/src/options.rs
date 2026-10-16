@@ -17,6 +17,8 @@ use crate::error::{ErrorContext, MarkdownConversionError};
 pub struct ConvertOptions {
     /// Reject a request whose cancellation flag was already set.
     pub aborted: bool,
+    /// `documentType`. Only `report` changes output: table header shading.
+    pub document_type: Option<DocumentType>,
     pub style: Option<StyleOverrides>,
     pub template: Option<SectionConfig>,
     pub sections: Option<Vec<DocumentSection>>,
@@ -45,6 +47,12 @@ impl ConvertOptions {
     /// True when no section, style, TOC, or caption option is set.
     pub fn is_plain(&self) -> bool {
         self.style.is_none()
+            && !matches!(self.document_type, Some(DocumentType::Report))
+            && self
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.language.as_ref())
+                .is_none()
             && self.template.is_none()
             && self
                 .sections
@@ -100,6 +108,25 @@ impl ConvertOptions {
                     section.config.style.as_ref(),
                     &format!("options.sections[{index}].style"),
                 )?;
+            }
+        }
+        if self.sections.as_ref().is_some_and(Vec::is_empty) {
+            return Err(MarkdownConversionError::new(
+                "Invalid sections input: options.sections must contain at least one section",
+            ));
+        }
+        if let Some(toc) = &self.toc {
+            for (name, value) in [("minDepth", toc.min_depth), ("maxDepth", toc.max_depth)] {
+                if value.is_some_and(|value| !(1..=6).contains(&value)) {
+                    return Err(MarkdownConversionError::new(format!(
+                        "Invalid TOC {name}: Must be an integer between 1 and 6"
+                    )));
+                }
+            }
+            if matches!((toc.min_depth, toc.max_depth), (Some(min), Some(max)) if min > max) {
+                return Err(MarkdownConversionError::new(
+                    "Invalid TOC depth range: minDepth cannot be greater than maxDepth",
+                ));
             }
         }
         validate_captions(self.captions.as_ref())?;
@@ -407,7 +434,62 @@ pub struct CodeHighlightingOptions {
     pub languages: Option<Vec<String>>,
     /// `None` shows the language label. Only `false` hides it.
     pub show_language_label: Option<OptionBool>,
+    /// Replaces the built-in Syntect tokenizer. The Node binding uses it to
+    /// run lowlight with the full theme, so colored runs match the
+    /// TypeScript renderer exactly.
+    pub tokenizer: Option<HighlightTokenizer>,
 }
+
+type HighlightFn = dyn Fn(&str, &str) -> Result<Option<Vec<crate::highlight::HighlightSpan>>, MarkdownConversionError>
+    + Send
+    + Sync;
+
+/// A trusted tokenizer callback: `(code, language)` to colored spans.
+/// `Ok(None)` means the language is unknown and the block stays plain.
+#[derive(Clone)]
+pub struct HighlightTokenizer {
+    tokenize: Arc<HighlightFn>,
+}
+
+impl HighlightTokenizer {
+    pub fn new<F>(tokenize: F) -> Self
+    where
+        F: Fn(
+                &str,
+                &str,
+            )
+                -> Result<Option<Vec<crate::highlight::HighlightSpan>>, MarkdownConversionError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self {
+            tokenize: Arc::new(tokenize),
+        }
+    }
+
+    pub fn tokenize(
+        &self,
+        code: &str,
+        language: &str,
+    ) -> Result<Option<Vec<crate::highlight::HighlightSpan>>, MarkdownConversionError> {
+        (self.tokenize)(code, language)
+    }
+}
+
+impl std::fmt::Debug for HighlightTokenizer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HighlightTokenizer")
+    }
+}
+
+impl PartialEq for HighlightTokenizer {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tokenize, &other.tokenize)
+    }
+}
+
+impl Eq for HighlightTokenizer {}
 
 /// Partial highlight theme. Absent keys keep the built-in GitHub-light colors.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -497,7 +579,7 @@ fn validate_text_replacements(options: &ConvertOptions) -> Result<(), MarkdownCo
     }
     if replacements.len() > 50 {
         return Err(MarkdownConversionError::new(
-            "textReplacements supports at most 50 entries",
+            "Failed to convert markdown to docx: textReplacements supports at most 50 entries",
         ));
     }
     for replacement in replacements {
@@ -511,7 +593,7 @@ fn validate_text_replacements(options: &ConvertOptions) -> Result<(), MarkdownCo
         if let TextReplace::Text(text) = &replacement.replace {
             if utf16_len(text) > 4096 {
                 return Err(MarkdownConversionError::new(
-                    "textReplacements replacement text is too large",
+                    "Failed to convert markdown to docx: textReplacements replacement text is too large",
                 ));
             }
         }
@@ -523,7 +605,7 @@ fn validate_text_replacements(options: &ConvertOptions) -> Result<(), MarkdownCo
             }
             TextFind::Literal(source) if utf16_len(source) > 256 => {
                 return Err(MarkdownConversionError::new(
-                    "textReplacements string pattern is too large",
+                    "Failed to convert markdown to docx: textReplacements string pattern is too large",
                 ));
             }
             TextFind::Regex(_) | TextFind::Literal(_) => {}
@@ -646,6 +728,43 @@ fn validate_style(
     let Some(style) = style else {
         return Ok(());
     };
+    let range_error = |message: &str, key: &str, value: f64| {
+        let mut context = ErrorContext::new();
+        context.insert("styleContext".to_string(), style_context.to_string());
+        context.insert(key.to_string(), js_number_string(value));
+        MarkdownConversionError::with_context(message, context)
+    };
+    if let Some(size) = style.title_size.filter(|size| !(8..=72).contains(size)) {
+        return Err(range_error(
+            "Invalid title size: Must be between 8 and 72 points",
+            "titleSize",
+            f64::from(size),
+        ));
+    }
+    if let Some(spacing) = style.heading_spacing.filter(|spacing| *spacing > 720) {
+        return Err(range_error(
+            "Invalid heading spacing: Must be between 0 and 720 twips",
+            "headingSpacing",
+            f64::from(spacing),
+        ));
+    }
+    if let Some(spacing) = style.paragraph_spacing.filter(|spacing| *spacing > 720) {
+        return Err(range_error(
+            "Invalid paragraph spacing: Must be between 0 and 720 twips",
+            "paragraphSpacing",
+            f64::from(spacing),
+        ));
+    }
+    if let Some(spacing) = style
+        .line_spacing
+        .filter(|spacing| !(1.0..=3.0).contains(spacing))
+    {
+        return Err(range_error(
+            "Invalid line spacing: Must be between 1 and 3",
+            "lineSpacing",
+            spacing,
+        ));
+    }
     if let Some(font) = font_after_normalize(style) {
         if font.trim().is_empty() {
             return Err(MarkdownConversionError::new(
@@ -670,7 +789,119 @@ fn validate_style(
             ));
         }
     }
+    if let Some(widths) = &style.table_column_widths {
+        let valid = |width: &f64| width.fract() == 0.0 && (1.0..=31680.0).contains(width);
+        if widths.is_empty() || !widths.iter().all(valid) {
+            return Err(MarkdownConversionError::new("Invalid tableColumnWidths"));
+        }
+    }
+    if style.table_allow_row_split == Some(OptionBool::Invalid) {
+        return Err(MarkdownConversionError::new("Invalid tableAllowRowSplit"));
+    }
+    validate_hex_color(
+        style.table_header_background.as_deref(),
+        "tableHeaderBackground",
+        style_context,
+    )?;
+    if let Some(margins) = &style.table_cell_margins {
+        let valid = |value: f64| value.fract() == 0.0 && (0.0..=31680.0).contains(&value);
+        if [margins.top, margins.bottom, margins.left, margins.right]
+            .into_iter()
+            .flatten()
+            .any(|value| !valid(value))
+        {
+            return Err(MarkdownConversionError::new("Invalid tableCellMargins"));
+        }
+    }
+    validate_hex_color(
+        style.inline_code_color.as_deref(),
+        "inlineCodeColor",
+        style_context,
+    )?;
+    validate_hex_color(
+        style.inline_code_background.as_deref(),
+        "inlineCodeBackground",
+        style_context,
+    )?;
+    if let Some(callouts) = &style.callout_styles {
+        if !callouts.is_object {
+            let mut context = ErrorContext::new();
+            context.insert("styleContext".to_string(), style_context.to_string());
+            return Err(MarkdownConversionError::with_context(
+                "Invalid calloutStyles: Must be an object",
+                context,
+            ));
+        }
+        for (name, entry) in &callouts.entries {
+            if !CALLOUT_NAMES.contains(&name.as_str()) {
+                let mut context = ErrorContext::new();
+                context.insert("styleContext".to_string(), style_context.to_string());
+                context.insert("calloutType".to_string(), name.clone());
+                return Err(MarkdownConversionError::with_context(
+                    format!("Invalid calloutStyles key: {name}"),
+                    context,
+                ));
+            }
+            let Some(entry) = entry else {
+                let mut context = ErrorContext::new();
+                context.insert("styleContext".to_string(), style_context.to_string());
+                return Err(MarkdownConversionError::with_context(
+                    format!("Invalid calloutStyles.{name}: Must be an object"),
+                    context,
+                ));
+            };
+            validate_hex_color(
+                entry.border_color.as_deref(),
+                &format!("calloutStyles.{name}.borderColor"),
+                style_context,
+            )?;
+            validate_hex_color(
+                entry.background_color.as_deref(),
+                &format!("calloutStyles.{name}.backgroundColor"),
+                style_context,
+            )?;
+            validate_hex_color(
+                entry.title_color.as_deref(),
+                &format!("calloutStyles.{name}.titleColor"),
+                style_context,
+            )?;
+        }
+    }
     Ok(())
+}
+
+/// The valid `calloutStyles` keys.
+pub const CALLOUT_NAMES: [&str; 5] = ["note", "tip", "important", "warning", "caution"];
+
+/// `validateHexColorOption`.
+fn validate_hex_color(
+    value: Option<&str>,
+    name: &str,
+    style_context: &str,
+) -> Result<(), MarkdownConversionError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let is_hex = value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if is_hex {
+        return Ok(());
+    }
+    let mut context = ErrorContext::new();
+    context.insert("context".to_string(), style_context.to_string());
+    context.insert("value".to_string(), value.to_string());
+    Err(MarkdownConversionError::with_context(
+        format!("{name} must be a 6-character hex color"),
+        context,
+    ))
+}
+
+/// `String(value)` for a finite number.
+fn js_number_string(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e21 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
 }
 
 /// `normalizeStyleInput` keeps a set `fontFamily` when it is non-empty in the
@@ -709,6 +940,58 @@ pub struct SectionConfig {
     pub break_type: Option<SectionBreak>,
 }
 
+/// `documentType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentType {
+    Document,
+    Report,
+}
+
+/// `tableLayout`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableLayout {
+    Autofit,
+    Fixed,
+}
+
+/// `tableCellMargins`. Values are kept as given so validation can reject
+/// fractions and out-of-range numbers with the TypeScript messages.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CellMargins {
+    pub top: Option<f64>,
+    pub bottom: Option<f64>,
+    pub left: Option<f64>,
+    pub right: Option<f64>,
+}
+
+/// One `calloutStyles` entry. Colours are kept as the JavaScript string of
+/// the given value so the hex check sees what the TypeScript check sees.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CalloutStyleInput {
+    pub label: Option<String>,
+    pub border_color: Option<String>,
+    pub background_color: Option<String>,
+    pub title_color: Option<String>,
+}
+
+/// `calloutStyles` as given. `entries` keeps unknown keys and non-object
+/// values so validation can report them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CalloutStylesInput {
+    pub is_object: bool,
+    pub entries: Vec<(String, Option<CalloutStyleInput>)>,
+}
+
+impl CalloutStylesInput {
+    /// The entry for a valid callout name, if any.
+    pub fn get(&self, name: &str) -> Option<&CalloutStyleInput> {
+        self.entries
+            .iter()
+            .find(|(key, _)| key == name)
+            .and_then(|(_, value)| value.as_ref())
+    }
+}
+
 /// Partial style. Absent fields do not override a lower-precedence value.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StyleOverrides {
@@ -733,6 +1016,17 @@ pub struct StyleOverrides {
     pub toc_heading_font_size: [Option<u32>; 6],
     pub toc_heading_bold: [Option<bool>; 6],
     pub toc_heading_italic: [Option<bool>; 6],
+    pub inline_code_size: Option<u32>,
+    pub inline_code_color: Option<String>,
+    pub inline_code_background: Option<String>,
+    pub blockquote_alignment: Option<Alignment>,
+    pub code_block_alignment: Option<Alignment>,
+    pub table_layout: Option<TableLayout>,
+    pub table_column_widths: Option<Vec<f64>>,
+    pub table_allow_row_split: Option<OptionBool>,
+    pub table_header_background: Option<String>,
+    pub table_cell_margins: Option<CellMargins>,
+    pub callout_styles: Option<CalloutStylesInput>,
 }
 
 /// Paragraph alignment.
@@ -904,6 +1198,17 @@ pub struct ResolvedStyle {
     pub toc_heading_font_size: [Option<u32>; 6],
     pub toc_heading_bold: [Option<bool>; 6],
     pub toc_heading_italic: [Option<bool>; 6],
+    pub inline_code_size: Option<u32>,
+    pub inline_code_color: Option<String>,
+    pub inline_code_background: Option<String>,
+    pub blockquote_alignment: Option<Alignment>,
+    pub code_block_alignment: Option<Alignment>,
+    pub table_layout: Option<TableLayout>,
+    pub table_column_widths: Option<Vec<u32>>,
+    pub table_allow_row_split: Option<bool>,
+    pub table_header_background: Option<String>,
+    pub table_cell_margins: Option<CellMargins>,
+    pub callout_styles: Option<CalloutStylesInput>,
 }
 
 impl ResolvedStyle {
@@ -942,6 +1247,17 @@ impl Default for ResolvedStyle {
             toc_heading_font_size: [None; 6],
             toc_heading_bold: [None; 6],
             toc_heading_italic: [None; 6],
+            inline_code_size: None,
+            inline_code_color: None,
+            inline_code_background: None,
+            blockquote_alignment: None,
+            code_block_alignment: None,
+            table_layout: None,
+            table_column_widths: None,
+            table_allow_row_split: None,
+            table_header_background: None,
+            table_cell_margins: None,
+            callout_styles: None,
         }
     }
 }
@@ -1131,7 +1447,7 @@ fn resolve_one(
     }
 }
 
-fn resolve_style(
+pub(crate) fn resolve_style(
     base: Option<&ResolvedStyle>,
     overrides: Option<&StyleOverrides>,
 ) -> ResolvedStyle {
@@ -1201,6 +1517,39 @@ fn apply_style(style: &mut ResolvedStyle, overrides: &StyleOverrides) {
     }
     if let Some(value) = overrides.toc_font_size {
         style.toc_font_size = Some(value);
+    }
+    if let Some(value) = overrides.inline_code_size {
+        style.inline_code_size = Some(value);
+    }
+    if let Some(value) = &overrides.inline_code_color {
+        style.inline_code_color = Some(value.clone());
+    }
+    if let Some(value) = &overrides.inline_code_background {
+        style.inline_code_background = Some(value.clone());
+    }
+    if let Some(value) = overrides.blockquote_alignment {
+        style.blockquote_alignment = Some(value);
+    }
+    if let Some(value) = overrides.code_block_alignment {
+        style.code_block_alignment = Some(value);
+    }
+    if let Some(value) = overrides.table_layout {
+        style.table_layout = Some(value);
+    }
+    if let Some(widths) = &overrides.table_column_widths {
+        style.table_column_widths = Some(widths.iter().map(|width| *width as u32).collect());
+    }
+    if let Some(OptionBool::Bool(value)) = overrides.table_allow_row_split {
+        style.table_allow_row_split = Some(value);
+    }
+    if let Some(value) = &overrides.table_header_background {
+        style.table_header_background = Some(value.clone());
+    }
+    if let Some(value) = &overrides.table_cell_margins {
+        style.table_cell_margins = Some(value.clone());
+    }
+    if let Some(value) = &overrides.callout_styles {
+        style.callout_styles = Some(value.clone());
     }
 }
 

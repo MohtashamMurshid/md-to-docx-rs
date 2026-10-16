@@ -18,6 +18,9 @@ use crate::options::{
     SectionConfig, SizeInput, StyleOverrides, TextFind, TextReplace, TextReplacement,
     TextReplacementMode, TocMode, TocOverrides, UpdateFieldsOnOpen,
 };
+use crate::options::{
+    CalloutStyleInput, CalloutStylesInput, CellMargins, DocumentType, TableLayout,
+};
 use serde_json::Value;
 
 const PLUGINS_ERROR: &str =
@@ -58,6 +61,12 @@ pub fn load_options_json(text: &str, path: &str) -> Result<LoadedOptions, String
             .and_then(|signal| signal.get("aborted"))
             .and_then(|aborted| aborted.as_bool())
             == Some(true);
+    }
+    if let Some(document_type) = object.get("documentType") {
+        loaded.convert.document_type = Some(match document_type.as_str() {
+            Some("report") => DocumentType::Report,
+            _ => DocumentType::Document,
+        });
     }
     if let Some(style) = object.get("style") {
         loaded.convert.style = Some(parse_style(style, "options.style")?);
@@ -178,7 +187,12 @@ fn parse_sections(value: &Value) -> Result<Vec<DocumentSection>, String> {
         };
         let markdown = match object.get("markdown") {
             Some(Value::String(markdown)) => markdown.clone(),
-            _ => return Err(format!("{context}.markdown must be a string")),
+            _ => {
+                return Err(
+                    "Invalid section markdown: each section must provide a markdown string"
+                        .to_string(),
+                )
+            }
         };
         parsed.push(DocumentSection {
             markdown,
@@ -215,7 +229,10 @@ fn parse_section_config(value: &Value, context: &str) -> Result<SectionConfig, S
         config.page_numbering = Some(parse_page_numbering(numbering, context)?);
     }
     if let Some(title_page) = object.get("titlePage") {
-        config.title_page = Some(json_bool(title_page, &format!("{context}.titlePage"))?);
+        config.title_page = Some(
+            json_bool(title_page, &format!("{context}.titlePage"))
+                .map_err(|_| "Invalid titlePage: Must be a boolean value")?,
+        );
     }
     if let Some(kind) = object.get("type") {
         config.break_type = Some(parse_section_break(kind)?);
@@ -297,7 +314,87 @@ fn parse_style(value: &Value, context: &str) -> Result<StyleOverrides, String> {
     if let Some(size) = object.get("tocFontSize") {
         style.toc_font_size = Some(json_u32(size, "tocFontSize")?);
     }
+    if let Some(size) = object.get("inlineCodeSize") {
+        style.inline_code_size = Some(json_u32(size, "inlineCodeSize")?);
+    }
+    if let Some(color) = object.get("inlineCodeColor") {
+        style.inline_code_color = Some(js_string_of(color));
+    }
+    if let Some(color) = object.get("inlineCodeBackground") {
+        style.inline_code_background = Some(js_string_of(color));
+    }
+    if let Some(alignment) = object.get("blockquoteAlignment") {
+        style.blockquote_alignment = Some(parse_alignment(alignment, "blockquoteAlignment")?);
+    }
+    if let Some(alignment) = object.get("codeBlockAlignment") {
+        style.code_block_alignment = Some(parse_alignment(alignment, "codeBlockAlignment")?);
+    }
+    if let Some(layout) = object.get("tableLayout") {
+        style.table_layout = Some(match layout.as_str() {
+            Some("fixed") => TableLayout::Fixed,
+            _ => TableLayout::Autofit,
+        });
+    }
+    if let Some(widths) = object.get("tableColumnWidths") {
+        // Any shape is kept; validation reports `Invalid tableColumnWidths`.
+        style.table_column_widths = Some(match widths.as_array() {
+            Some(items) => items
+                .iter()
+                .map(|item| item.as_f64().unwrap_or(f64::NAN))
+                .collect(),
+            None => Vec::new(),
+        });
+    }
+    if let Some(split) = object.get("tableAllowRowSplit") {
+        style.table_allow_row_split = Some(parse_option_bool(split));
+    }
+    if let Some(color) = object.get("tableHeaderBackground") {
+        style.table_header_background = Some(js_string_of(color));
+    }
+    if let Some(margins) = object.get("tableCellMargins") {
+        let mut parsed = CellMargins::default();
+        if let Some(object) = margins.as_object() {
+            let read = |key: &str| {
+                object
+                    .get(key)
+                    .map(|value| value.as_f64().unwrap_or(f64::NAN))
+            };
+            parsed.top = read("top");
+            parsed.bottom = read("bottom");
+            parsed.left = read("left");
+            parsed.right = read("right");
+        }
+        style.table_cell_margins = Some(parsed);
+    }
+    if let Some(callouts) = object.get("calloutStyles") {
+        let mut parsed = CalloutStylesInput::default();
+        if let Some(object) = callouts.as_object() {
+            parsed.is_object = true;
+            for (key, value) in object {
+                let entry = value.as_object().map(|entry| CalloutStyleInput {
+                    label: entry.get("label").map(js_string_of),
+                    border_color: entry.get("borderColor").map(js_string_of),
+                    background_color: entry.get("backgroundColor").map(js_string_of),
+                    title_color: entry.get("titleColor").map(js_string_of),
+                });
+                parsed.entries.push((key.clone(), entry));
+            }
+        }
+        style.callout_styles = Some(parsed);
+    }
     Ok(style)
+}
+
+/// `String(value)` for a JSON value, enough for the hex colour check.
+fn js_string_of(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Null => "null".to_string(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Array(items) => items.iter().map(js_string_of).collect::<Vec<_>>().join(","),
+        Value::Object(_) => "[object Object]".to_string(),
+    }
 }
 
 fn parse_page(value: &Value, context: &str) -> Result<PageInput, String> {
@@ -320,25 +417,46 @@ fn parse_margin(value: &Value) -> Result<MarginInput, String> {
     };
     let mut margin = MarginInput::default();
     if let Some(top) = object.get("top") {
-        margin.top = Some(json_u32(top, "margin.top")?);
+        margin.top = Some(
+            json_u32(top, "margin.top")
+                .map_err(|_| "Invalid page margin 'top': Must be a finite number >= 0")?,
+        );
     }
     if let Some(right) = object.get("right") {
-        margin.right = Some(json_u32(right, "margin.right")?);
+        margin.right = Some(
+            json_u32(right, "margin.right")
+                .map_err(|_| "Invalid page margin 'right': Must be a finite number >= 0")?,
+        );
     }
     if let Some(bottom) = object.get("bottom") {
-        margin.bottom = Some(json_u32(bottom, "margin.bottom")?);
+        margin.bottom = Some(
+            json_u32(bottom, "margin.bottom")
+                .map_err(|_| "Invalid page margin 'bottom': Must be a finite number >= 0")?,
+        );
     }
     if let Some(left) = object.get("left") {
-        margin.left = Some(json_u32(left, "margin.left")?);
+        margin.left = Some(
+            json_u32(left, "margin.left")
+                .map_err(|_| "Invalid page margin 'left': Must be a finite number >= 0")?,
+        );
     }
     if let Some(header) = object.get("header") {
-        margin.header = Some(json_u32(header, "margin.header")?);
+        margin.header = Some(
+            json_u32(header, "margin.header")
+                .map_err(|_| "Invalid page margin 'header': Must be a finite number >= 0")?,
+        );
     }
     if let Some(footer) = object.get("footer") {
-        margin.footer = Some(json_u32(footer, "margin.footer")?);
+        margin.footer = Some(
+            json_u32(footer, "margin.footer")
+                .map_err(|_| "Invalid page margin 'footer': Must be a finite number >= 0")?,
+        );
     }
     if let Some(gutter) = object.get("gutter") {
-        margin.gutter = Some(json_u32(gutter, "margin.gutter")?);
+        margin.gutter = Some(
+            json_u32(gutter, "margin.gutter")
+                .map_err(|_| "Invalid page margin 'gutter': Must be a finite number >= 0")?,
+        );
     }
     Ok(margin)
 }
@@ -349,10 +467,20 @@ fn parse_size(value: &Value) -> Result<SizeInput, String> {
     };
     let mut size = SizeInput::default();
     if let Some(width) = object.get("width") {
-        size.width = Some(json_u32(width, "size.width")?);
+        size.width = Some(
+            json_u32(width, "size.width")
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or("Invalid page width: Must be a finite number > 0")?,
+        );
     }
     if let Some(height) = object.get("height") {
-        size.height = Some(json_u32(height, "size.height")?);
+        size.height = Some(
+            json_u32(height, "size.height")
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or("Invalid page height: Must be a finite number > 0")?,
+        );
     }
     if let Some(orientation) = object.get("orientation") {
         size.orientation = Some(match orientation.as_str() {
@@ -370,7 +498,12 @@ fn parse_page_numbering(value: &Value, context: &str) -> Result<PageNumberingInp
     };
     let mut numbering = PageNumberingInput::default();
     if let Some(start) = object.get("start") {
-        numbering.start = Some(json_u32(start, "pageNumbering.start")?);
+        numbering.start = Some(
+            json_u32(start, "pageNumbering.start")
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or("Invalid page number start: Must be an integer >= 1")?,
+        );
     }
     if let Some(format) = object.get("formatType") {
         numbering.format = Some(parse_page_format(format)?);
@@ -412,7 +545,7 @@ fn parse_header_footer_slot(value: &Value, context: &str) -> Result<HeaderFooter
         return Ok(HeaderFooterSlot::Remove);
     }
     let Some(object) = value.as_object() else {
-        return Err(format!("{context} must be an object or null"));
+        return Err("Invalid header/footer slot: Must be an object or null".to_string());
     };
     let mut content = HeaderFooterContent::default();
     if let Some(markdown) = object.get("markdown") {
@@ -422,7 +555,11 @@ fn parse_header_footer_slot(value: &Value, context: &str) -> Result<HeaderFooter
         content.text = Some(json_string(text, &format!("{context}.text"))?);
     }
     if let Some(alignment) = object.get("alignment") {
-        content.alignment = Some(parse_alignment(alignment, "header/footer alignment")?);
+        content.alignment = Some(
+            parse_alignment(alignment, "header/footer alignment").map_err(|_| {
+                "Invalid header/footer alignment: Must be one of LEFT, CENTER, RIGHT, JUSTIFIED"
+            })?,
+        );
     }
     if let Some(display) = object.get("pageNumberDisplay") {
         content.page_number_display = Some(parse_page_display(display)?);
@@ -439,7 +576,7 @@ fn parse_toc(value: &Value) -> Result<TocOverrides, String> {
         toc.mode = Some(match mode.as_str() {
             Some("native") => TocMode::Native,
             Some("links") => TocMode::Links,
-            _ => return Err("Invalid toc.mode: Must be native or links".to_string()),
+            _ => return Err("Invalid toc.mode".to_string()),
         });
     }
     if let Some(page_numbers) = object.get("pageNumbers") {
@@ -452,7 +589,9 @@ fn parse_toc(value: &Value) -> Result<TocOverrides, String> {
         toc.update_fields_on_open = Some(json_bool(update, "toc.updateFieldsOnOpen")?);
     }
     if let Some(title) = object.get("title") {
-        toc.title = Some(json_string(title, "toc.title")?);
+        toc.title = Some(
+            json_string(title, "toc.title").map_err(|_| "Invalid TOC title: Must be a string")?,
+        );
     }
     if let Some(depth) = object.get("minDepth") {
         toc.min_depth = Some(json_u8(depth, "toc.minDepth")?);
@@ -620,8 +759,10 @@ fn parse_highlighting(value: &Value) -> Result<CodeHighlightingOptions, String> 
 }
 
 fn parse_theme(value: &Value) -> Result<CodeHighlightTheme, String> {
+    // `resolveTheme` spreads any value over the defaults, so a non-object
+    // theme contributes nothing.
     let Some(object) = value.as_object() else {
-        return Err("codeHighlighting.theme must be an object".to_string());
+        return Ok(CodeHighlightTheme::default());
     };
     let mut theme = CodeHighlightTheme::default();
     if let Some(color) = object.get("default") {
@@ -782,6 +923,27 @@ fn parse_style_selectors(
     };
     let mut styles = BTreeMap::new();
     for (role, selector) in object {
+        if !matches!(
+            role.as_str(),
+            "normal"
+                | "title"
+                | "heading1"
+                | "heading2"
+                | "heading3"
+                | "heading4"
+                | "heading5"
+                | "heading6"
+                | "codeBlock"
+                | "inlineCode"
+                | "blockquote"
+                | "caption"
+                | "listParagraph"
+                | "strong"
+                | "emphasis"
+                | "hyperlink"
+        ) {
+            continue;
+        }
         if selector.is_null() {
             continue;
         }
@@ -867,7 +1029,7 @@ fn parse_image_handling(value: &Value) -> Result<crate::images::ImageOptions, St
                 v.as_array()
                     .ok_or("imageHandling.remote.allowedHosts must be an array")?
                     .iter()
-                    .map(|v| json_string(v, "imageHandling.remote.allowedHosts"))
+                    .map(|v| json_string(v, "imageHandling.remote.allowedHosts").ok().filter(|host| !host.trim().is_empty()).ok_or_else(|| "Invalid imageHandling.remote.allowedHosts: must be non-empty strings".to_string()))
                     .collect::<Result<_, _>>()?,
             );
         }
@@ -881,7 +1043,10 @@ fn parse_image_handling(value: &Value) -> Result<crate::images::ImageOptions, St
         }
     }
     if let Some(v) = object.get("maxImages") {
-        config.max_images = json_u32(v, "imageHandling.maxImages")?;
+        config.max_images = json_u32(v, "maxImages")
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or("maxImages must be a positive integer")?;
     }
     if let Some(v) = object.get("maxImageBytes") {
         config.max_image_bytes = json_u32(v, "imageHandling.maxImageBytes")? as usize;
@@ -926,7 +1091,7 @@ fn parse_section_break(value: &Value) -> Result<SectionBreak, String> {
         Some("EVEN_PAGE") => Ok(SectionBreak::EvenPage),
         Some("ODD_PAGE") => Ok(SectionBreak::OddPage),
         _ => Err(
-            "Invalid section type: Must be NEXT_PAGE, NEXT_COLUMN, CONTINUOUS, EVEN_PAGE, or ODD_PAGE"
+            "Invalid section type: Must be one of NEXT_PAGE, NEXT_COLUMN, CONTINUOUS, EVEN_PAGE, ODD_PAGE"
                 .to_string(),
         ),
     }
@@ -967,7 +1132,7 @@ fn parse_page_display(value: &Value) -> Result<PageNumberDisplay, String> {
         Some("currentAndTotal") => Ok(PageNumberDisplay::CurrentAndTotal),
         Some("currentAndSectionTotal") => Ok(PageNumberDisplay::CurrentAndSectionTotal),
         _ => Err(
-            "Invalid page number display: Must be none, current, currentAndTotal, or currentAndSectionTotal"
+            "Invalid page number display: Must be one of none, current, currentAndTotal, currentAndSectionTotal"
                 .to_string(),
         ),
     }

@@ -14,7 +14,7 @@
     }
   },
   "engines": {
-    "node": ">=20.9.0"
+    "node": "^20.10.0 || >=22.0.0"
   },
   "files": [
     "index.js",
@@ -24,7 +24,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test test/*.test.mjs",
+    "test": "node scripts/test.mjs",
     "test:types": "tsc -p test/tsconfig.json"
   },
   "license": "MIT",

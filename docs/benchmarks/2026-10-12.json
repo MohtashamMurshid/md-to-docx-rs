@@ -1,0 +1,1844 @@
+{
+  "metadata": {
+    "date": "2026-10-11T18:52:46.643189+00:00",
+    "git_commit": "582e9a8ea8544bb63744686ec620bab84c891b13",
+    "cpu": "Apple M3",
+    "logical_cpus": 8,
+    "ram_bytes": 17179869184,
+    "os": "macOS-27.2-arm64-arm-64bit",
+    "node": "v24.18.0",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: aarch64-apple-darwin\nrelease: 1.99.0\nLLVM version: 23.1.1",
+    "npm": {
+      "version": "0.1.0",
+      "name": "md-to-docx-rs",
+      "dependencies": {
+        "@mohtasham/md-to-docx": {
+          "version": "4.0.1",
+          "resolved": "https://registry.npmjs.org/@mohtasham/md-to-docx/-/md-to-docx-4.0.1.tgz",
+          "overridden": false,
+          "dependencies": {
+            "docx": {
+              "version": "9.5.0",
+              "resolved": "https://registry.npmjs.org/docx/-/docx-9.5.0.tgz",
+              "overridden": true
+            },
+            "lowlight": {
+              "version": "3.3.0",
+              "resolved": "https://registry.npmjs.org/lowlight/-/lowlight-3.3.0.tgz",
+              "overridden": false
+            },
+            "remark-math": {
+              "version": "6.0.0",
+              "resolved": "https://registry.npmjs.org/remark-math/-/remark-math-6.0.0.tgz",
+              "overridden": false,
+              "dependencies": {
+                "micromark-extension-math": {
+                  "version": "3.1.0",
+                  "resolved": "https://registry.npmjs.org/micromark-extension-math/-/micromark-extension-math-3.1.0.tgz",
+                  "overridden": false,
+                  "dependencies": {
+                    "katex": {
+                      "version": "0.18.2",
+                      "resolved": "https://registry.npmjs.org/katex/-/katex-0.18.2.tgz",
+                      "overridden": true
+                    }
+                  }
+                }
+              }
+            },
+            "remark": {
+              "version": "15.0.1",
+              "resolved": "https://registry.npmjs.org/remark/-/remark-15.0.1.tgz",
+              "overridden": false
+            },
+            "sharp": {
+              "version": "0.35.5",
+              "resolved": "https://registry.npmjs.org/sharp/-/sharp-0.35.5.tgz",
+              "overridden": true
+            }
+          }
+        }
+      }
+    },
+    "warmups": 2,
+    "runs": 12,
+    "historical_fixtures": false,
+    "method": "Fresh process per engine/case; sequential engines with rotated order; median of 12 calls after two warmups; no forced GC between calls; input/import/output I/O excluded.",
+    "memory_method": "Separate fresh process, zero warmups, one conversion; macOS time -l maximum resident set size in bytes, entire process including imports; no ZIP inspection in that process.",
+    "timed_api": {
+      "typescript": "convertMarkdownToDocx -> Blob",
+      "rust-node": "convertMarkdownToDocx -> Blob",
+      "rust-core": "convert_with_options -> Vec<u8>"
+    },
+    "fixture_version": 2
+  },
+  "results": [
+    {
+      "case": "prose",
+      "input_sha256": "7fd2e5bb86de20ee15056187c3d4cc16a74ce3c4dd34766abb95ae5e498a4d5e",
+      "options_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "engines": {
+        "typescript": {
+          "engine": "typescript",
+          "input_bytes": 384808,
+          "input_chars": 384808,
+          "docx_bytes": 172482,
+          "import_ms": 121.28125,
+          "warmup_ms": [
+            791.947709,
+            702.0560839999999
+          ],
+          "samples_ms": [
+            691.033291,
+            684.924125,
+            700.1554580000002,
+            655.2653750000004,
+            645.9380000000001,
+            668.1933329999993,
+            659.963084,
+            661.3108750000001,
+            674.3438750000005,
+            669.7507500000002,
+            673.2391669999997,
+            673.9677500000016
+          ],
+          "memory_at_return": {
+            "rss": 1464942592,
+            "heapTotal": 433307648,
+            "heapUsed": 117814416,
+            "external": 22299487,
+            "arrayBuffers": 19465785
+          },
+          "plugin_calls": 0,
+          "median_ms": 671.4949584999999,
+          "min_ms": 645.9380000000001,
+          "max_ms": 700.1554580000002,
+          "cold": {
+            "engine": "typescript",
+            "input_bytes": 384808,
+            "input_chars": 384808,
+            "docx_bytes": 172477,
+            "import_ms": 126.80554199999999,
+            "warmup_ms": [],
+            "samples_ms": [
+              800.29125
+            ],
+            "memory_at_return": {
+              "rss": 582057984,
+              "heapTotal": 459784192,
+              "heapUsed": 362175168,
+              "external": 22306019,
+              "arrayBuffers": 19465775
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 585629696,
+            "peak_rss_mib": 558.5
+          },
+          "typescript_time_divided_by_this": 1.0,
+          "output": {
+            "docx_bytes": 172482,
+            "document_xml_bytes": 6174350,
+            "document_xml_sha256": "e43915c73fc3212f62ff2076bec8141b7173aeec5d1c21b2bcd2d71560b33b91",
+            "all_visible_text_sha256": "90c1bb9ac28a576b64bd2e2ea0a18ec4df3d180c6ff42f2cca859c6971722a8e",
+            "paragraphs": 3200,
+            "runs": 35200,
+            "color_elements": 35200,
+            "distinct_colors": [
+              "000000",
+              "0000FF"
+            ],
+            "hyperlink_relationships": 3200,
+            "distinct_hyperlink_targets": 25,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 3200,
+              "i": 3200,
+              "u": 6400,
+              "strike": 3200,
+              "hyperlink": 3200
+            },
+            "uncompressed_total_bytes": 6782315,
+            "parts_uncompressed_bytes": {
+              "word/": 0,
+              "word/_rels/": 0,
+              "word/_rels/document.xml.rels": 588577,
+              "word/document.xml": 6174350,
+              "word/styles.xml": 4173,
+              "docProps/": 0,
+              "docProps/core.xml": 643,
+              "word/numbering.xml": 3172,
+              "_rels/": 0,
+              "_rels/.rels": 718,
+              "word/_rels/footer1.xml.rels": 123,
+              "word/footer1.xml": 1463,
+              "[Content_Types].xml": 2101,
+              "docProps/custom.xml": 228,
+              "docProps/app.xml": 230,
+              "word/footnotes.xml": 1692,
+              "word/_rels/footnotes.xml.rels": 123,
+              "word/settings.xml": 1395,
+              "word/comments.xml": 2246,
+              "word/_rels/comments.xml.rels": 123,
+              "word/fontTable.xml": 835,
+              "word/_rels/fontTable.xml.rels": 123
+            },
+            "media_count": 0
+          }
+        },
+        "rust-node": {
+          "engine": "rust-node",
+          "input_bytes": 384808,
+          "input_chars": 384808,
+          "docx_bytes": 49151,
+          "import_ms": 3.6095419999999994,
+          "warmup_ms": [
+            53.988665999999995,
+            41.9105
+          ],
+          "samples_ms": [
+            40.835750000000004,
+            41.202541999999994,
+            41.1395,
+            41.388374999999996,
+            41.49041599999998,
+            40.78045900000001,
+            40.58854200000002,
+            41.854375000000005,
+            41.11312499999997,
+            41.137541999999996,
+            41.01754200000005,
+            40.847125000000005
+          ],
+          "memory_at_return": {
+            "rss": 271171584,
+            "heapTotal": 8011776,
+            "heapUsed": 4751024,
+            "external": 2695135,
+            "arrayBuffers": 825581
+          },
+          "plugin_calls": 0,
+          "median_ms": 41.12533349999998,
+          "min_ms": 40.58854200000002,
+          "max_ms": 41.854375000000005,
+          "cold": {
+            "engine": "rust-node",
+            "input_bytes": 384808,
+            "input_chars": 384808,
+            "docx_bytes": 49151,
+            "import_ms": 3.272874999999999,
+            "warmup_ms": [],
+            "samples_ms": [
+              43.538709000000004
+            ],
+            "memory_at_return": {
+              "rss": 100007936,
+              "heapTotal": 7749632,
+              "heapUsed": 4659208,
+              "external": 2056172,
+              "arrayBuffers": 186618
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 103694336,
+            "peak_rss_mib": 98.890625
+          },
+          "typescript_time_divided_by_this": 16.328012476786363,
+          "output": {
+            "docx_bytes": 49151,
+            "document_xml_bytes": 6110544,
+            "document_xml_sha256": "17fcae3e44e0514eb3db7a9d80e56ec08b4246f7397372f29c0d14607c95fd0c",
+            "all_visible_text_sha256": "90c1bb9ac28a576b64bd2e2ea0a18ec4df3d180c6ff42f2cca859c6971722a8e",
+            "paragraphs": 3200,
+            "runs": 35200,
+            "color_elements": 35200,
+            "distinct_colors": [
+              "000000",
+              "0000FF"
+            ],
+            "hyperlink_relationships": 25,
+            "distinct_hyperlink_targets": 25,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 3200,
+              "i": 3200,
+              "u": 6400,
+              "strike": 3200,
+              "hyperlink": 3200
+            },
+            "uncompressed_total_bytes": 6125181,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1062,
+              "_rels/.rels": 442,
+              "word/document.xml": 6110544,
+              "word/_rels/document.xml.rels": 4784,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 1920,
+              "word/settings.xml": 187,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 0,
+            "text_matches_typescript_exactly": true
+          }
+        },
+        "rust-core": {
+          "docx_bytes": 49151,
+          "engine": "rust-core",
+          "input_bytes": 384808,
+          "input_chars": 384808,
+          "samples_ms": [
+            41.485417,
+            41.017208,
+            40.805458,
+            41.521625,
+            40.652375,
+            41.083084,
+            40.908917,
+            40.556583,
+            40.901,
+            40.663083,
+            40.661333,
+            41.278334
+          ],
+          "warmup_ms": [
+            46.753,
+            41.850458
+          ],
+          "median_ms": 40.904958500000006,
+          "min_ms": 40.556583,
+          "max_ms": 41.521625,
+          "cold": {
+            "docx_bytes": 49151,
+            "engine": "rust-core",
+            "input_bytes": 384808,
+            "input_chars": 384808,
+            "samples_ms": [
+              42.968375
+            ],
+            "warmup_ms": [],
+            "peak_rss_bytes": 50348032,
+            "peak_rss_mib": 48.015625
+          },
+          "typescript_time_divided_by_this": 16.415979458822818,
+          "output": {
+            "docx_bytes": 49151,
+            "document_xml_bytes": 6110544,
+            "document_xml_sha256": "17fcae3e44e0514eb3db7a9d80e56ec08b4246f7397372f29c0d14607c95fd0c",
+            "all_visible_text_sha256": "90c1bb9ac28a576b64bd2e2ea0a18ec4df3d180c6ff42f2cca859c6971722a8e",
+            "paragraphs": 3200,
+            "runs": 35200,
+            "color_elements": 35200,
+            "distinct_colors": [
+              "000000",
+              "0000FF"
+            ],
+            "hyperlink_relationships": 25,
+            "distinct_hyperlink_targets": 25,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 3200,
+              "i": 3200,
+              "u": 6400,
+              "strike": 3200,
+              "hyperlink": 3200
+            },
+            "uncompressed_total_bytes": 6125181,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1062,
+              "_rels/.rels": 442,
+              "word/document.xml": 6110544,
+              "word/_rels/document.xml.rels": 4784,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 1920,
+              "word/settings.xml": 187,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 0,
+            "text_matches_typescript_exactly": true
+          }
+        }
+      }
+    },
+    {
+      "case": "lists",
+      "input_sha256": "6acd0fd57c42353fcd3bde7096aefdc5596f9210a49599a909cb71fb2c295d31",
+      "options_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "engines": {
+        "rust-node": {
+          "engine": "rust-node",
+          "input_bytes": 94888,
+          "input_chars": 94888,
+          "docx_bytes": 39931,
+          "import_ms": 3.216583,
+          "warmup_ms": [
+            24.705125,
+            22.290749999999996
+          ],
+          "samples_ms": [
+            22.219959000000003,
+            22.093167000000008,
+            22.451582999999985,
+            22.152625,
+            22.487875000000003,
+            22.49350000000001,
+            22.754541999999987,
+            22.552583,
+            22.49920899999998,
+            22.352874999999983,
+            22.815125000000023,
+            22.41429199999999
+          ],
+          "memory_at_return": {
+            "rss": 77250560,
+            "heapTotal": 7618560,
+            "heapUsed": 4460920,
+            "external": 2566055,
+            "arrayBuffers": 696501
+          },
+          "plugin_calls": 0,
+          "median_ms": 22.469728999999994,
+          "min_ms": 22.093167000000008,
+          "max_ms": 22.815125000000023,
+          "cold": {
+            "engine": "rust-node",
+            "input_bytes": 94888,
+            "input_chars": 94888,
+            "docx_bytes": 39931,
+            "import_ms": 3.2267080000000004,
+            "warmup_ms": [],
+            "samples_ms": [
+              24.986917000000002
+            ],
+            "memory_at_return": {
+              "rss": 74579968,
+              "heapTotal": 7356416,
+              "heapUsed": 4369288,
+              "external": 2046952,
+              "arrayBuffers": 177398
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 76038144,
+            "peak_rss_mib": 72.515625
+          },
+          "typescript_time_divided_by_this": 40.06562008380254,
+          "output": {
+            "docx_bytes": 39931,
+            "document_xml_bytes": 1629138,
+            "document_xml_sha256": "a51d96d184039f5f43ac0783a6b65edd44f147813317d28caeecfb31ef4a2434",
+            "all_visible_text_sha256": "10cea0fde82e12e7728e2033e731f6f1ebf895ba520c4f9f6d141d6a69d17bbc",
+            "paragraphs": 4800,
+            "runs": 4800,
+            "color_elements": 4800,
+            "distinct_colors": [
+              "000000"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1202,
+            "numbering_levels": 10818,
+            "format_elements": {
+              "b": 0,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 3780138,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1062,
+              "_rels/.rels": 442,
+              "word/document.xml": 1629138,
+              "word/_rels/document.xml.rels": 674,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 2142393,
+              "word/settings.xml": 187,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 0,
+            "text_matches_typescript_exactly": true
+          }
+        },
+        "rust-core": {
+          "docx_bytes": 39931,
+          "engine": "rust-core",
+          "input_bytes": 94888,
+          "input_chars": 94888,
+          "samples_ms": [
+            22.712542,
+            22.277209,
+            22.90925,
+            22.207042,
+            22.834625,
+            22.191417,
+            22.582333,
+            22.455792,
+            22.445417,
+            22.635917,
+            22.284374999999997,
+            22.696667
+          ],
+          "warmup_ms": [
+            23.730999999999998,
+            22.908624999999997
+          ],
+          "median_ms": 22.519062499999997,
+          "min_ms": 22.191417,
+          "max_ms": 22.90925,
+          "cold": {
+            "docx_bytes": 39931,
+            "engine": "rust-core",
+            "input_bytes": 94888,
+            "input_chars": 94888,
+            "samples_ms": [
+              23.829041
+            ],
+            "warmup_ms": [],
+            "peak_rss_bytes": 24903680,
+            "peak_rss_mib": 23.75
+          },
+          "typescript_time_divided_by_this": 39.97784656887916,
+          "output": {
+            "docx_bytes": 39931,
+            "document_xml_bytes": 1629138,
+            "document_xml_sha256": "a51d96d184039f5f43ac0783a6b65edd44f147813317d28caeecfb31ef4a2434",
+            "all_visible_text_sha256": "10cea0fde82e12e7728e2033e731f6f1ebf895ba520c4f9f6d141d6a69d17bbc",
+            "paragraphs": 4800,
+            "runs": 4800,
+            "color_elements": 4800,
+            "distinct_colors": [
+              "000000"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1202,
+            "numbering_levels": 10818,
+            "format_elements": {
+              "b": 0,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 3780138,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1062,
+              "_rels/.rels": 442,
+              "word/document.xml": 1629138,
+              "word/_rels/document.xml.rels": 674,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 2142393,
+              "word/settings.xml": 187,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 0,
+            "text_matches_typescript_exactly": true
+          }
+        },
+        "typescript": {
+          "engine": "typescript",
+          "input_bytes": 94888,
+          "input_chars": 94888,
+          "docx_bytes": 46366,
+          "import_ms": 123.255583,
+          "warmup_ms": [
+            988.899542,
+            901.1711659999999
+          ],
+          "samples_ms": [
+            903.5695839999998,
+            892.225958,
+            936.5833340000004,
+            880.1148749999993,
+            896.3504160000002,
+            887.8576249999996,
+            912.0295419999993,
+            904.0924579999992,
+            886.0181670000002,
+            908.4697500000002,
+            906.1177499999994,
+            896.9576670000006
+          ],
+          "memory_at_return": {
+            "rss": 1147469824,
+            "heapTotal": 598654976,
+            "heapUsed": 497929272,
+            "external": 16667305,
+            "arrayBuffers": 13753852
+          },
+          "plugin_calls": 0,
+          "median_ms": 900.2636255000002,
+          "min_ms": 880.1148749999993,
+          "max_ms": 936.5833340000004,
+          "cold": {
+            "engine": "typescript",
+            "input_bytes": 94888,
+            "input_chars": 94888,
+            "docx_bytes": 46367,
+            "import_ms": 124.206708,
+            "warmup_ms": [],
+            "samples_ms": [
+              1006.0272500000001
+            ],
+            "memory_at_return": {
+              "rss": 527630336,
+              "heapTotal": 436928512,
+              "heapUsed": 345497384,
+              "external": 16542771,
+              "arrayBuffers": 13576417
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 533544960,
+            "peak_rss_mib": 508.828125
+          },
+          "typescript_time_divided_by_this": 1.0,
+          "output": {
+            "docx_bytes": 46366,
+            "document_xml_bytes": 1631249,
+            "document_xml_sha256": "6974a4a50636da172a6720f3cb31bd637ce200dbeae3c50d83cc722082e6c760",
+            "all_visible_text_sha256": "10cea0fde82e12e7728e2033e731f6f1ebf895ba520c4f9f6d141d6a69d17bbc",
+            "paragraphs": 4800,
+            "runs": 4800,
+            "color_elements": 4800,
+            "distinct_colors": [
+              "000000"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1202,
+            "numbering_levels": 10818,
+            "format_elements": {
+              "b": 0,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 4028761,
+            "parts_uncompressed_bytes": {
+              "word/": 0,
+              "word/_rels/": 0,
+              "word/_rels/document.xml.rels": 1054,
+              "word/document.xml": 1631249,
+              "word/styles.xml": 4173,
+              "docProps/": 0,
+              "docProps/core.xml": 643,
+              "word/numbering.xml": 2380242,
+              "_rels/": 0,
+              "_rels/.rels": 718,
+              "word/_rels/footer1.xml.rels": 123,
+              "word/footer1.xml": 1463,
+              "[Content_Types].xml": 2101,
+              "docProps/custom.xml": 228,
+              "docProps/app.xml": 230,
+              "word/footnotes.xml": 1692,
+              "word/_rels/footnotes.xml.rels": 123,
+              "word/settings.xml": 1395,
+              "word/comments.xml": 2246,
+              "word/_rels/comments.xml.rels": 123,
+              "word/fontTable.xml": 835,
+              "word/_rels/fontTable.xml.rels": 123
+            },
+            "media_count": 0
+          }
+        }
+      }
+    },
+    {
+      "case": "plain-code",
+      "input_sha256": "df0a20ad9dc05d3dc75bfd996f85406089d425a4c00f8dbf1742b0fc7eb9d5b2",
+      "options_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "engines": {
+        "rust-core": {
+          "docx_bytes": 12151,
+          "engine": "rust-core",
+          "input_bytes": 55606,
+          "input_chars": 55606,
+          "samples_ms": [
+            2.064333,
+            2.01525,
+            2.009541,
+            1.9770830000000001,
+            2.1168329999999997,
+            2.129583,
+            2.142458,
+            1.919084,
+            1.965459,
+            1.955292,
+            1.93825,
+            1.9519579999999999
+          ],
+          "warmup_ms": [
+            2.2008750000000004,
+            1.951584
+          ],
+          "median_ms": 1.993312,
+          "min_ms": 1.919084,
+          "max_ms": 2.142458,
+          "cold": {
+            "docx_bytes": 12151,
+            "engine": "rust-core",
+            "input_bytes": 55606,
+            "input_chars": 55606,
+            "samples_ms": [
+              2.224666
+            ],
+            "warmup_ms": [],
+            "peak_rss_bytes": 6144000,
+            "peak_rss_mib": 5.859375
+          },
+          "typescript_time_divided_by_this": 11.143524194907776,
+          "output": {
+            "docx_bytes": 12151,
+            "document_xml_bytes": 390974,
+            "document_xml_sha256": "079df5ca1e030a6a4527cdeb59a7b7ed592ab855ebf1c74a08d41a70f7082e77",
+            "all_visible_text_sha256": "5a693893d9fa67f5b93ad5b6191d51117a5dd4997a58be409f0dc06b0044deef",
+            "paragraphs": 15,
+            "runs": 1288,
+            "color_elements": 648,
+            "distinct_colors": [
+              "444444",
+              "666666"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 8,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 401501,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1062,
+              "_rels/.rels": 442,
+              "word/document.xml": 390974,
+              "word/_rels/document.xml.rels": 674,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 1920,
+              "word/settings.xml": 187,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 0,
+            "text_matches_typescript_exactly": true
+          }
+        },
+        "typescript": {
+          "engine": "typescript",
+          "input_bytes": 55606,
+          "input_chars": 55606,
+          "docx_bytes": 14922,
+          "import_ms": 124.47200000000001,
+          "warmup_ms": [
+            49.28241700000001,
+            31.057040999999998
+          ],
+          "samples_ms": [
+            24.214875000000006,
+            22.221625000000017,
+            28.366874999999993,
+            24.15266600000001,
+            25.335665999999947,
+            21.371208000000024,
+            24.61612500000001,
+            19.08479200000005,
+            21.216834000000006,
+            21.826250000000016,
+            18.838167,
+            22.203416000000004
+          ],
+          "memory_at_return": {
+            "rss": 310706176,
+            "heapTotal": 222773248,
+            "heapUsed": 100876320,
+            "external": 10533791,
+            "arrayBuffers": 7670296
+          },
+          "plugin_calls": 0,
+          "median_ms": 22.21252050000001,
+          "min_ms": 18.838167,
+          "max_ms": 28.366874999999993,
+          "cold": {
+            "engine": "typescript",
+            "input_bytes": 55606,
+            "input_chars": 55606,
+            "docx_bytes": 14922,
+            "import_ms": 124.459416,
+            "warmup_ms": [],
+            "samples_ms": [
+              51.046707999999995
+            ],
+            "memory_at_return": {
+              "rss": 136888320,
+              "heapTotal": 99631104,
+              "heapUsed": 29928656,
+              "external": 9178780,
+              "arrayBuffers": 6180981
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 137543680,
+            "peak_rss_mib": 131.171875
+          },
+          "typescript_time_divided_by_this": 1.0,
+          "output": {
+            "docx_bytes": 14922,
+            "document_xml_bytes": 362173,
+            "document_xml_sha256": "45a04a449fd8491f430febb1a48ff6462f299b463884f4202759a334f641bfe8",
+            "all_visible_text_sha256": "5a693893d9fa67f5b93ad5b6191d51117a5dd4997a58be409f0dc06b0044deef",
+            "paragraphs": 15,
+            "runs": 1288,
+            "color_elements": 648,
+            "distinct_colors": [
+              "444444",
+              "666666"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 8,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 382615,
+            "parts_uncompressed_bytes": {
+              "word/": 0,
+              "word/_rels/": 0,
+              "word/_rels/document.xml.rels": 1054,
+              "word/document.xml": 362173,
+              "word/styles.xml": 4173,
+              "docProps/": 0,
+              "docProps/core.xml": 643,
+              "word/numbering.xml": 3172,
+              "_rels/": 0,
+              "_rels/.rels": 718,
+              "word/_rels/footer1.xml.rels": 123,
+              "word/footer1.xml": 1463,
+              "[Content_Types].xml": 2101,
+              "docProps/custom.xml": 228,
+              "docProps/app.xml": 230,
+              "word/footnotes.xml": 1692,
+              "word/_rels/footnotes.xml.rels": 123,
+              "word/settings.xml": 1395,
+              "word/comments.xml": 2246,
+              "word/_rels/comments.xml.rels": 123,
+              "word/fontTable.xml": 835,
+              "word/_rels/fontTable.xml.rels": 123
+            },
+            "media_count": 0
+          }
+        },
+        "rust-node": {
+          "engine": "rust-node",
+          "input_bytes": 55606,
+          "input_chars": 55606,
+          "docx_bytes": 12151,
+          "import_ms": 3.6387919999999987,
+          "warmup_ms": [
+            3.7714169999999996,
+            2.0874580000000016
+          ],
+          "samples_ms": [
+            1.9876670000000018,
+            1.9831660000000007,
+            1.9567499999999995,
+            1.9597499999999997,
+            2.1104580000000013,
+            2.202916000000002,
+            2.032916,
+            2.0095829999999992,
+            1.972332999999999,
+            2.108124999999994,
+            1.9642499999999998,
+            1.9426670000000001
+          ],
+          "memory_at_return": {
+            "rss": 56623104,
+            "heapTotal": 7618560,
+            "heapUsed": 4421840,
+            "external": 2177135,
+            "arrayBuffers": 307581
+          },
+          "plugin_calls": 0,
+          "median_ms": 1.9854165000000012,
+          "min_ms": 1.9426670000000001,
+          "max_ms": 2.202916000000002,
+          "cold": {
+            "engine": "rust-node",
+            "input_bytes": 55606,
+            "input_chars": 55606,
+            "docx_bytes": 12151,
+            "import_ms": 3.562417,
+            "warmup_ms": [],
+            "samples_ms": [
+              3.741583000000002
+            ],
+            "memory_at_return": {
+              "rss": 55656448,
+              "heapTotal": 7356416,
+              "heapUsed": 4330024,
+              "external": 2019172,
+              "arrayBuffers": 149618
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 56655872,
+            "peak_rss_mib": 54.03125
+          },
+          "typescript_time_divided_by_this": 11.187839176313885,
+          "output": {
+            "docx_bytes": 12151,
+            "document_xml_bytes": 390974,
+            "document_xml_sha256": "079df5ca1e030a6a4527cdeb59a7b7ed592ab855ebf1c74a08d41a70f7082e77",
+            "all_visible_text_sha256": "5a693893d9fa67f5b93ad5b6191d51117a5dd4997a58be409f0dc06b0044deef",
+            "paragraphs": 15,
+            "runs": 1288,
+            "color_elements": 648,
+            "distinct_colors": [
+              "444444",
+              "666666"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 8,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 401501,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1062,
+              "_rels/.rels": 442,
+              "word/document.xml": 390974,
+              "word/_rels/document.xml.rels": 674,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 1920,
+              "word/settings.xml": 187,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 0,
+            "text_matches_typescript_exactly": true
+          }
+        }
+      }
+    },
+    {
+      "case": "highlighted-ts",
+      "input_sha256": "df0a20ad9dc05d3dc75bfd996f85406089d425a4c00f8dbf1742b0fc7eb9d5b2",
+      "options_sha256": "603f40857ef2a4ab634749c06769877dc6dd4ca46723d13613b8fbf4fbc65dfc",
+      "engines": {
+        "typescript": {
+          "engine": "typescript",
+          "input_bytes": 55606,
+          "input_chars": 55606,
+          "docx_bytes": 41734,
+          "import_ms": 127.61316699999999,
+          "warmup_ms": [
+            262.03937499999995,
+            176.79429100000004
+          ],
+          "samples_ms": [
+            188.579209,
+            176.25545799999998,
+            174.96408400000007,
+            178.71104100000002,
+            170.02645800000005,
+            178.5132910000002,
+            169.1624999999999,
+            177.752792,
+            170.1945000000003,
+            177.47229199999992,
+            169.127833,
+            176.19541700000036
+          ],
+          "memory_at_return": {
+            "rss": 551796736,
+            "heapTotal": 299597824,
+            "heapUsed": 193718304,
+            "external": 18300224,
+            "arrayBuffers": 15377508
+          },
+          "plugin_calls": 0,
+          "median_ms": 176.22543750000017,
+          "min_ms": 169.127833,
+          "max_ms": 188.579209,
+          "cold": {
+            "engine": "typescript",
+            "input_bytes": 55606,
+            "input_chars": 55606,
+            "docx_bytes": 41735,
+            "import_ms": 128.10120799999999,
+            "warmup_ms": [],
+            "samples_ms": [
+              248.51158299999997
+            ],
+            "memory_at_return": {
+              "rss": 345931776,
+              "heapTotal": 260374528,
+              "heapUsed": 125843080,
+              "external": 16181337,
+              "arrayBuffers": 13210351
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 346603520,
+            "peak_rss_mib": 330.546875
+          },
+          "typescript_time_divided_by_this": 1.0,
+          "output": {
+            "docx_bytes": 41734,
+            "document_xml_bytes": 3307453,
+            "document_xml_sha256": "8804a827a5bd17866ae186f23705f0671b4f8e917c5bf165bba659b84a57acde",
+            "all_visible_text_sha256": "9f513ad65cf5a64300d710f2abd2176a02cb8aa8bb99bac65b03659c477531a6",
+            "paragraphs": 15,
+            "runs": 13448,
+            "color_elements": 12808,
+            "distinct_colors": [
+              "005CC5",
+              "032F62",
+              "24292E",
+              "6A737D",
+              "6F42C1",
+              "D73A49"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 8,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 3327895,
+            "parts_uncompressed_bytes": {
+              "word/": 0,
+              "word/_rels/": 0,
+              "word/_rels/document.xml.rels": 1054,
+              "word/document.xml": 3307453,
+              "word/styles.xml": 4173,
+              "docProps/": 0,
+              "docProps/core.xml": 643,
+              "word/numbering.xml": 3172,
+              "_rels/": 0,
+              "_rels/.rels": 718,
+              "word/_rels/footer1.xml.rels": 123,
+              "word/footer1.xml": 1463,
+              "[Content_Types].xml": 2101,
+              "docProps/custom.xml": 228,
+              "docProps/app.xml": 230,
+              "word/footnotes.xml": 1692,
+              "word/_rels/footnotes.xml.rels": 123,
+              "word/settings.xml": 1395,
+              "word/comments.xml": 2246,
+              "word/_rels/comments.xml.rels": 123,
+              "word/fontTable.xml": 835,
+              "word/_rels/fontTable.xml.rels": 123
+            },
+            "media_count": 0,
+            "nonbreaking_spaces": 2560
+          }
+        },
+        "rust-node": {
+          "engine": "rust-node",
+          "input_bytes": 55606,
+          "input_chars": 55606,
+          "docx_bytes": 45390,
+          "import_ms": 3.4302920000000015,
+          "warmup_ms": [
+            156.260042,
+            84.13150000000002
+          ],
+          "samples_ms": [
+            84.60666699999996,
+            84.04691700000001,
+            83.82029200000005,
+            84.29291699999999,
+            83.53374999999994,
+            84.01824999999997,
+            83.92166699999996,
+            84.14870800000006,
+            85.156833,
+            83.23079199999984,
+            83.6812910000001,
+            83.88750000000005
+          ],
+          "memory_at_return": {
+            "rss": 150716416,
+            "heapTotal": 7618560,
+            "heapUsed": 4433968,
+            "external": 2642481,
+            "arrayBuffers": 772927
+          },
+          "plugin_calls": 0,
+          "median_ms": 83.96995849999996,
+          "min_ms": 83.23079199999984,
+          "max_ms": 85.156833,
+          "cold": {
+            "engine": "rust-node",
+            "input_bytes": 55606,
+            "input_chars": 55606,
+            "docx_bytes": 45390,
+            "import_ms": 3.4409170000000024,
+            "warmup_ms": [],
+            "samples_ms": [
+              154.055
+            ],
+            "memory_at_return": {
+              "rss": 87326720,
+              "heapTotal": 7356416,
+              "heapUsed": 4331600,
+              "external": 2052411,
+              "arrayBuffers": 182857
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 88293376,
+            "peak_rss_mib": 84.203125
+          },
+          "typescript_time_divided_by_this": 2.0986724377147365,
+          "output": {
+            "docx_bytes": 45390,
+            "document_xml_bytes": 4646974,
+            "document_xml_sha256": "19f2c680ceef61b4c1852c099d880960e6a0d0d6b7f752a8abac6c6a12af1f4c",
+            "all_visible_text_sha256": "5a693893d9fa67f5b93ad5b6191d51117a5dd4997a58be409f0dc06b0044deef",
+            "paragraphs": 15,
+            "runs": 17288,
+            "color_elements": 16648,
+            "distinct_colors": [
+              "005CC5",
+              "032F62",
+              "24292E",
+              "6A737D",
+              "6F42C1",
+              "D73A49",
+              "E36209"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 8,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 4657501,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1062,
+              "_rels/.rels": 442,
+              "word/document.xml": 4646974,
+              "word/_rels/document.xml.rels": 674,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 1920,
+              "word/settings.xml": 187,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 0,
+            "nonbreaking_spaces": 0,
+            "text_matches_typescript_exactly": false
+          }
+        },
+        "rust-core": {
+          "docx_bytes": 45390,
+          "engine": "rust-core",
+          "input_bytes": 55606,
+          "input_chars": 55606,
+          "samples_ms": [
+            92.560125,
+            90.19616699999999,
+            85.167125,
+            94.281791,
+            83.925334,
+            83.032125,
+            82.61825,
+            82.814166,
+            82.9075,
+            82.767708,
+            83.838208,
+            83.325
+          ],
+          "warmup_ms": [
+            151.783625,
+            86.472709
+          ],
+          "median_ms": 83.581604,
+          "min_ms": 82.61825,
+          "max_ms": 94.281791,
+          "cold": {
+            "docx_bytes": 45390,
+            "engine": "rust-core",
+            "input_bytes": 55606,
+            "input_chars": 55606,
+            "samples_ms": [
+              148.66620899999998
+            ],
+            "warmup_ms": [],
+            "peak_rss_bytes": 39043072,
+            "peak_rss_mib": 37.234375
+          },
+          "typescript_time_divided_by_this": 2.1084237328108726,
+          "output": {
+            "docx_bytes": 45390,
+            "document_xml_bytes": 4646974,
+            "document_xml_sha256": "19f2c680ceef61b4c1852c099d880960e6a0d0d6b7f752a8abac6c6a12af1f4c",
+            "all_visible_text_sha256": "5a693893d9fa67f5b93ad5b6191d51117a5dd4997a58be409f0dc06b0044deef",
+            "paragraphs": 15,
+            "runs": 17288,
+            "color_elements": 16648,
+            "distinct_colors": [
+              "005CC5",
+              "032F62",
+              "24292E",
+              "6A737D",
+              "6F42C1",
+              "D73A49",
+              "E36209"
+            ],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 8,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 4657501,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1062,
+              "_rels/.rels": 442,
+              "word/document.xml": 4646974,
+              "word/_rels/document.xml.rels": 674,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 1920,
+              "word/settings.xml": 187,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 0,
+            "nonbreaking_spaces": 0,
+            "text_matches_typescript_exactly": false
+          }
+        }
+      }
+    },
+    {
+      "case": "chart",
+      "input_sha256": "023df45dfaaf8ba4e0732f266e27c3ed24431b441763b1a9959eadf5f441f6a2",
+      "options_sha256": "9b0c2ec280dd28bd1ebeca5790d172d2fbcdcb1ae1ea7c30e1f81a090b4941bf",
+      "engines": {
+        "rust-node": {
+          "engine": "rust-node",
+          "input_bytes": 145,
+          "input_chars": 145,
+          "docx_bytes": 11901,
+          "import_ms": 3.6672499999999992,
+          "warmup_ms": [
+            4.657667,
+            2.200042
+          ],
+          "samples_ms": [
+            2.1457919999999966,
+            2.0941670000000023,
+            2.0325000000000024,
+            2.008459000000002,
+            1.9981659999999977,
+            1.9775830000000028,
+            1.983542,
+            2.0545410000000004,
+            2.0145419999999987,
+            2.0109589999999997,
+            1.9622500000000045,
+            1.96725
+          ],
+          "memory_at_return": {
+            "rss": 59359232,
+            "heapTotal": 7618560,
+            "heapUsed": 4378456,
+            "external": 2173635,
+            "arrayBuffers": 304081
+          },
+          "plugin_calls": 0,
+          "median_ms": 2.009709000000001,
+          "min_ms": 1.9622500000000045,
+          "max_ms": 2.1457919999999966,
+          "cold": {
+            "engine": "rust-node",
+            "input_bytes": 145,
+            "input_chars": 145,
+            "docx_bytes": 11901,
+            "import_ms": 3.425500000000003,
+            "warmup_ms": [],
+            "samples_ms": [
+              3.9065420000000017
+            ],
+            "memory_at_return": {
+              "rss": 58654720,
+              "heapTotal": 7356416,
+              "heapUsed": 4275904,
+              "external": 2018922,
+              "arrayBuffers": 149368
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 59310080,
+            "peak_rss_mib": 56.5625
+          },
+          "typescript_time_divided_by_this": 127.21509059271762,
+          "output": {
+            "docx_bytes": 11901,
+            "document_xml_bytes": 1792,
+            "document_xml_sha256": "3e1129be0bc7942c195e1414006650df0f19908bdf355da7eebc388aeb9cfb5e",
+            "all_visible_text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "paragraphs": 1,
+            "runs": 1,
+            "color_elements": 0,
+            "distinct_colors": [],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 0,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 46084,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1112,
+              "_rels/.rels": 442,
+              "word/document.xml": 1792,
+              "word/_rels/document.xml.rels": 806,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 1920,
+              "word/settings.xml": 187,
+              "word/media/image1.png": 33583,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 1,
+            "chart_dimensions": [
+              1200,
+              800
+            ],
+            "chart_png_bytes": 33583,
+            "chart_png_sha256": "37eec41fc09e95a1adc3d529058f7151eb11a900d3f27818c75e57f875af0280",
+            "chart_rgba_sha256": "91c288d4ab550a2cc45523ad4788d522bcc33e6c9242bc47cd79f582f058d504",
+            "chart_nonwhite_pixels": 15112
+          }
+        },
+        "rust-core": {
+          "docx_bytes": 11901,
+          "engine": "rust-core",
+          "input_bytes": 145,
+          "input_chars": 145,
+          "samples_ms": [
+            2.008792,
+            1.9732500000000002,
+            1.9620420000000003,
+            2.159292,
+            2.043916,
+            2.0158340000000003,
+            1.984917,
+            1.9688750000000002,
+            1.987875,
+            1.994458,
+            1.977,
+            1.996
+          ],
+          "warmup_ms": [
+            2.5150419999999998,
+            2.099167
+          ],
+          "median_ms": 1.9911665,
+          "min_ms": 1.9620420000000003,
+          "max_ms": 2.159292,
+          "cold": {
+            "docx_bytes": 11901,
+            "engine": "rust-core",
+            "input_bytes": 145,
+            "input_chars": 145,
+            "samples_ms": [
+              2.4395
+            ],
+            "warmup_ms": [],
+            "peak_rss_bytes": 9076736,
+            "peak_rss_mib": 8.65625
+          },
+          "typescript_time_divided_by_this": 128.39976591611,
+          "output": {
+            "docx_bytes": 11901,
+            "document_xml_bytes": 1792,
+            "document_xml_sha256": "3e1129be0bc7942c195e1414006650df0f19908bdf355da7eebc388aeb9cfb5e",
+            "all_visible_text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "paragraphs": 1,
+            "runs": 1,
+            "color_elements": 0,
+            "distinct_colors": [],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 0,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 46084,
+            "parts_uncompressed_bytes": {
+              "[Content_Types].xml": 1112,
+              "_rels/.rels": 442,
+              "word/document.xml": 1792,
+              "word/_rels/document.xml.rels": 806,
+              "word/styles.xml": 4890,
+              "word/numbering.xml": 1920,
+              "word/settings.xml": 187,
+              "word/media/image1.png": 33583,
+              "word/footer1.xml": 600,
+              "word/_rels/footer1.xml.rels": 155,
+              "docProps/core.xml": 597
+            },
+            "media_count": 1,
+            "chart_dimensions": [
+              1200,
+              800
+            ],
+            "chart_png_bytes": 33583,
+            "chart_png_sha256": "37eec41fc09e95a1adc3d529058f7151eb11a900d3f27818c75e57f875af0280",
+            "chart_rgba_sha256": "91c288d4ab550a2cc45523ad4788d522bcc33e6c9242bc47cd79f582f058d504",
+            "chart_nonwhite_pixels": 15112
+          }
+        },
+        "typescript": {
+          "engine": "typescript",
+          "input_bytes": 145,
+          "input_chars": 145,
+          "docx_bytes": 21156,
+          "import_ms": 127.505417,
+          "warmup_ms": [
+            283.798541,
+            252.481042
+          ],
+          "samples_ms": [
+            259.3957499999999,
+            256.3805,
+            256.0729170000002,
+            255.25770799999987,
+            255.10474999999997,
+            257.42941699999983,
+            253.60825000000023,
+            257.2442500000002,
+            251.47204199999987,
+            257.0354580000003,
+            254.5010830000001,
+            255.05341700000008
+          ],
+          "memory_at_return": {
+            "rss": 327041024,
+            "heapTotal": 161382400,
+            "heapUsed": 23936608,
+            "external": 16524168,
+            "arrayBuffers": 13539140
+          },
+          "plugin_calls": 0,
+          "median_ms": 255.66531250000003,
+          "min_ms": 251.47204199999987,
+          "max_ms": 259.3957499999999,
+          "cold": {
+            "engine": "typescript",
+            "input_bytes": 145,
+            "input_chars": 145,
+            "docx_bytes": 21159,
+            "import_ms": 122.854917,
+            "warmup_ms": [],
+            "samples_ms": [
+              318.14879199999996
+            ],
+            "memory_at_return": {
+              "rss": 240451584,
+              "heapTotal": 221446144,
+              "heapUsed": 88647288,
+              "external": 16399636,
+              "arrayBuffers": 13408074
+            },
+            "plugin_calls": 0,
+            "peak_rss_bytes": 276119552,
+            "peak_rss_mib": 263.328125
+          },
+          "typescript_time_divided_by_this": 1.0,
+          "output": {
+            "docx_bytes": 21156,
+            "document_xml_bytes": 3828,
+            "document_xml_sha256": "c4aac63ad7f0dbeebb4ac1e1a4c24ebc4bca9d8ac977402af09ceb87247e1b26",
+            "all_visible_text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "paragraphs": 1,
+            "runs": 1,
+            "color_elements": 0,
+            "distinct_colors": [],
+            "hyperlink_relationships": 0,
+            "distinct_hyperlink_targets": 0,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 0,
+              "i": 0,
+              "u": 0,
+              "strike": 0,
+              "hyperlink": 0
+            },
+            "uncompressed_total_bytes": 3865594,
+            "parts_uncompressed_bytes": {
+              "word/": 0,
+              "word/_rels/": 0,
+              "word/_rels/document.xml.rels": 1220,
+              "word/document.xml": 3828,
+              "word/styles.xml": 4173,
+              "docProps/": 0,
+              "docProps/core.xml": 643,
+              "word/numbering.xml": 3172,
+              "_rels/": 0,
+              "_rels/.rels": 718,
+              "word/_rels/footer1.xml.rels": 123,
+              "word/footer1.xml": 1463,
+              "[Content_Types].xml": 2101,
+              "docProps/custom.xml": 228,
+              "docProps/app.xml": 230,
+              "word/footnotes.xml": 1692,
+              "word/_rels/footnotes.xml.rels": 123,
+              "word/settings.xml": 1395,
+              "word/comments.xml": 2246,
+              "word/_rels/comments.xml.rels": 123,
+              "word/fontTable.xml": 835,
+              "word/_rels/fontTable.xml.rels": 123,
+              "word/media/": 0,
+              "word/media/4c01b8c040e553dfd9cedc7916243be194b3ed4d.png": 3841158
+            },
+            "media_count": 1,
+            "chart_dimensions": [
+              1200,
+              800
+            ],
+            "chart_png_bytes": 3841158,
+            "chart_png_sha256": "4009211b3be86e051fc50011a673afa6e363454a3598c4622769a04daf1763b6",
+            "chart_rgba_sha256": "91c288d4ab550a2cc45523ad4788d522bcc33e6c9242bc47cd79f582f058d504",
+            "chart_nonwhite_pixels": 15112
+          }
+        }
+      }
+    },
+    {
+      "case": "plugin-fallback",
+      "input_sha256": "22118d4d13c307099dfb7479b32cd975dfd6cdc1a8293c96fe3273d96bd632b5",
+      "options_sha256": "70b04fa6fd24fbcdf8a445cd3330dfb8f0b1700932555930dc7aeb055b0629d9",
+      "engines": {
+        "rust-node": {
+          "engine": "rust-node",
+          "input_bytes": 23808,
+          "input_chars": 23808,
+          "docx_bytes": 19303,
+          "import_ms": 3.3299579999999995,
+          "warmup_ms": [
+            207.662458,
+            56.51095799999999
+          ],
+          "samples_ms": [
+            47.86212499999999,
+            46.868457999999976,
+            46.89808399999998,
+            41.14670799999999,
+            41.765083000000004,
+            51.52241699999996,
+            43.12104099999999,
+            43.79654199999993,
+            39.95150000000001,
+            39.563499999999976,
+            42.68791699999997,
+            39.37225000000001
+          ],
+          "memory_at_return": {
+            "rss": 325042176,
+            "heapTotal": 243826688,
+            "heapUsed": 143306360,
+            "external": 10973314,
+            "arrayBuffers": 8090456
+          },
+          "plugin_calls": 14,
+          "median_ms": 42.90447899999998,
+          "min_ms": 39.37225000000001,
+          "max_ms": 51.52241699999996,
+          "cold": {
+            "engine": "rust-node",
+            "input_bytes": 23808,
+            "input_chars": 23808,
+            "docx_bytes": 19298,
+            "import_ms": 3.3123749999999994,
+            "warmup_ms": [],
+            "samples_ms": [
+              211.279833
+            ],
+            "memory_at_return": {
+              "rss": 166019072,
+              "heapTotal": 109346816,
+              "heapUsed": 35219200,
+              "external": 9401352,
+              "arrayBuffers": 6383504
+            },
+            "plugin_calls": 1,
+            "peak_rss_bytes": 166412288,
+            "peak_rss_mib": 158.703125
+          },
+          "typescript_time_divided_by_this": 1.0675468521596554,
+          "output": {
+            "docx_bytes": 19303,
+            "document_xml_bytes": 388150,
+            "document_xml_sha256": "23f9c807debce520e50b8e84511053714167ac381e2797b5c7735b61932a01dd",
+            "all_visible_text_sha256": "2ebca90c58d73b1bfb24f857a42f5abfefa4d549575c4c58f5d4e601f44fde70",
+            "paragraphs": 200,
+            "runs": 2200,
+            "color_elements": 2200,
+            "distinct_colors": [
+              "000000",
+              "0000FF"
+            ],
+            "hyperlink_relationships": 200,
+            "distinct_hyperlink_targets": 25,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 200,
+              "i": 200,
+              "u": 400,
+              "strike": 200,
+              "hyperlink": 200
+            },
+            "uncompressed_total_bytes": 445314,
+            "parts_uncompressed_bytes": {
+              "word/": 0,
+              "word/_rels/": 0,
+              "word/_rels/document.xml.rels": 37776,
+              "word/document.xml": 388150,
+              "word/styles.xml": 4173,
+              "docProps/": 0,
+              "docProps/core.xml": 643,
+              "word/numbering.xml": 3172,
+              "_rels/": 0,
+              "_rels/.rels": 718,
+              "word/_rels/footer1.xml.rels": 123,
+              "word/footer1.xml": 1463,
+              "[Content_Types].xml": 2101,
+              "docProps/custom.xml": 228,
+              "docProps/app.xml": 230,
+              "word/footnotes.xml": 1692,
+              "word/_rels/footnotes.xml.rels": 123,
+              "word/settings.xml": 1395,
+              "word/comments.xml": 2246,
+              "word/_rels/comments.xml.rels": 123,
+              "word/fontTable.xml": 835,
+              "word/_rels/fontTable.xml.rels": 123
+            },
+            "media_count": 0,
+            "text_matches_typescript_exactly": true
+          }
+        },
+        "typescript": {
+          "engine": "typescript",
+          "input_bytes": 23808,
+          "input_chars": 23808,
+          "docx_bytes": 19282,
+          "import_ms": 123.38883300000002,
+          "warmup_ms": [
+            86.41,
+            60.893249999999995
+          ],
+          "samples_ms": [
+            50.287582999999984,
+            50.06345900000002,
+            43.47604100000001,
+            45.04362500000002,
+            53.18941600000005,
+            45.80479200000002,
+            45.800291000000016,
+            40.408874999999966,
+            41.61095899999998,
+            44.307249999999954,
+            52.943625,
+            45.82283400000006
+          ],
+          "memory_at_return": {
+            "rss": 339787776,
+            "heapTotal": 207650816,
+            "heapUsed": 100780976,
+            "external": 10801412,
+            "arrayBuffers": 7846556
+          },
+          "plugin_calls": 14,
+          "median_ms": 45.80254150000002,
+          "min_ms": 40.408874999999966,
+          "max_ms": 53.18941600000005,
+          "cold": {
+            "engine": "typescript",
+            "input_bytes": 23808,
+            "input_chars": 23808,
+            "docx_bytes": 19281,
+            "import_ms": 123.409625,
+            "warmup_ms": [],
+            "samples_ms": [
+              86.90200000000002
+            ],
+            "memory_at_return": {
+              "rss": 176242688,
+              "heapTotal": 107773952,
+              "heapUsed": 34408704,
+              "external": 9311374,
+              "arrayBuffers": 6317934
+            },
+            "plugin_calls": 1,
+            "peak_rss_bytes": 176586752,
+            "peak_rss_mib": 168.40625
+          },
+          "typescript_time_divided_by_this": 1.0,
+          "output": {
+            "docx_bytes": 19282,
+            "document_xml_bytes": 388150,
+            "document_xml_sha256": "80adf953aae40559efb1e320103ff3b663910352f745c9dd451f34cf2b23796b",
+            "all_visible_text_sha256": "2ebca90c58d73b1bfb24f857a42f5abfefa4d549575c4c58f5d4e601f44fde70",
+            "paragraphs": 200,
+            "runs": 2200,
+            "color_elements": 2200,
+            "distinct_colors": [
+              "000000",
+              "0000FF"
+            ],
+            "hyperlink_relationships": 200,
+            "distinct_hyperlink_targets": 25,
+            "abstract_numbering_definitions": 1,
+            "numbering_levels": 9,
+            "format_elements": {
+              "b": 200,
+              "i": 200,
+              "u": 400,
+              "strike": 200,
+              "hyperlink": 200
+            },
+            "uncompressed_total_bytes": 445314,
+            "parts_uncompressed_bytes": {
+              "word/": 0,
+              "word/_rels/": 0,
+              "word/_rels/document.xml.rels": 37776,
+              "word/document.xml": 388150,
+              "word/styles.xml": 4173,
+              "docProps/": 0,
+              "docProps/core.xml": 643,
+              "word/numbering.xml": 3172,
+              "_rels/": 0,
+              "_rels/.rels": 718,
+              "word/_rels/footer1.xml.rels": 123,
+              "word/footer1.xml": 1463,
+              "[Content_Types].xml": 2101,
+              "docProps/custom.xml": 228,
+              "docProps/app.xml": 230,
+              "word/footnotes.xml": 1692,
+              "word/_rels/footnotes.xml.rels": 123,
+              "word/settings.xml": 1395,
+              "word/comments.xml": 2246,
+              "word/_rels/comments.xml.rels": 123,
+              "word/fontTable.xml": 835,
+              "word/_rels/fontTable.xml.rels": 123
+            },
+            "media_count": 0
+          }
+        }
+      }
+    }
+  ],
+  "verification": {
+    "passed_checks": [
+      "prose-typescript: ZIP integrity and all XML parts parse",
+      "prose-rust-node: ZIP integrity and all XML parts parse",
+      "prose-rust-core: ZIP integrity and all XML parts parse",
+      "prose-rust-node: concatenated Word text matches TypeScript exactly",
+      "prose-rust-core: concatenated Word text matches TypeScript exactly",
+      "prose: native Node and core document XML match exactly",
+      "lists-rust-node: ZIP integrity and all XML parts parse",
+      "lists-rust-core: ZIP integrity and all XML parts parse",
+      "lists-typescript: ZIP integrity and all XML parts parse",
+      "lists-rust-node: concatenated Word text matches TypeScript exactly",
+      "lists-rust-core: concatenated Word text matches TypeScript exactly",
+      "lists: native Node and core document XML match exactly",
+      "plain-code-rust-core: ZIP integrity and all XML parts parse",
+      "plain-code-typescript: ZIP integrity and all XML parts parse",
+      "plain-code-rust-node: ZIP integrity and all XML parts parse",
+      "plain-code-rust-node: concatenated Word text matches TypeScript exactly",
+      "plain-code-rust-core: concatenated Word text matches TypeScript exactly",
+      "plain-code: native Node and core document XML match exactly",
+      "highlighted-ts-typescript: ZIP integrity and all XML parts parse",
+      "highlighted-ts-typescript: actual token colors; all 640 functions preserved; text matches plain output after NBSP-to-space normalization",
+      "highlighted-ts-rust-node: ZIP integrity and all XML parts parse",
+      "highlighted-ts-rust-node: actual token colors; all 640 functions preserved; text matches plain output after NBSP-to-space normalization",
+      "highlighted-ts-rust-core: ZIP integrity and all XML parts parse",
+      "highlighted-ts-rust-core: actual token colors; all 640 functions preserved; text matches plain output after NBSP-to-space normalization",
+      "highlighted-ts-rust-node: concatenated Word text matches TypeScript after NBSP-to-space normalization",
+      "highlighted-ts-rust-core: concatenated Word text matches TypeScript after NBSP-to-space normalization",
+      "highlighted-ts: native Node and core document XML match exactly",
+      "chart-rust-node: ZIP integrity and all XML parts parse",
+      "chart-rust-core: ZIP integrity and all XML parts parse",
+      "chart-typescript: ZIP integrity and all XML parts parse",
+      "chart: native Node and core document XML match exactly",
+      "chart: decoded RGBA pixels match TypeScript, Rust Node and Rust core exactly; plotted content is present",
+      "plugin-fallback-rust-node: ZIP integrity and all XML parts parse",
+      "plugin-fallback-typescript: ZIP integrity and all XML parts parse",
+      "plugin-fallback-rust-node: concatenated Word text matches TypeScript exactly"
+    ],
+    "limitations": [
+      "Concatenated Word text checks do not establish whitespace layout, numbering restart behavior, pagination or styling equivalence.",
+      "Syntect and lowlight use different grammars and token/theme mappings.",
+      "Highlighted TypeScript output replaces some spaces with NBSP; Rust keeps ordinary spaces. Equality checks for that case normalize only NBSP to space.",
+      "Raw HTML underline differs: TypeScript prints <u> tags literally; Rust removes the tags and retains their text without underline. Prose timings use the shared ++underline++ syntax instead.",
+      "This chart's decoded pixels match exactly; PNG encoding differs. Other chart definitions were not checked for pixel equality.",
+      "Word/LibreOffice rendering and browser DOM execution were not tested."
+    ],
+    "html_underline_probe": {
+      "typescript": {
+        "word_text": "HTML underline: <u>word</u>",
+        "underline_elements": 0
+      },
+      "rust-node": {
+        "word_text": "HTML underline: word",
+        "underline_elements": 0
+      }
+    }
+  }
+}

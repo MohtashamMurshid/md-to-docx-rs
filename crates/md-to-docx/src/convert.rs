@@ -7,9 +7,9 @@ use zip::ZipArchive;
 use crate::error::MarkdownConversionError;
 use crate::ooxml::{self, PackageMetadata};
 use crate::options::{
-    normalize_document_metadata, ConvertOptions, Direction, DocumentMetadata,
-    DuplicateStyleNameBehavior, MarginInput, MissingStyleBehavior, NormalizedMetadata, Orientation,
-    PageInput, PatchMarkdownOptions, ReferenceDocxGenerationOptions, ReferenceDocxModeOptions,
+    normalize_document_metadata, ConvertOptions, DocumentMetadata, DuplicateStyleNameBehavior,
+    MarginInput, MissingStyleBehavior, NormalizedMetadata, Orientation, PageInput,
+    PatchMarkdownOptions, ReferenceDocxGenerationOptions, ReferenceDocxModeOptions,
     ReferenceStyleSelector, SectionConfig, SizeInput, UpdateFieldsOnOpen,
 };
 use crate::package;
@@ -105,8 +105,13 @@ pub fn patch_markdown(
         .iter()
         .map(|(name, markdown)| (name.as_str(), markdown.as_bytes()))
         .collect();
-    let mut patched =
-        crate::patch::patch_placeholders_with_options(&template, &owned, &convert_options)?;
+    let mut patched = crate::patch::patch_placeholders_with_options(
+        &template,
+        &owned,
+        &convert_options,
+        options.placeholder_delimiters.as_ref(),
+        options.table_width_twips,
+    )?;
     patched = finish_patch_document(&source, &patched)?;
     if let Some(width) = options.table_width_twips {
         patched = rewrite_table_widths(&patched, width)?;
@@ -142,6 +147,11 @@ pub fn convert_with_options(
     options: &ConvertOptions,
 ) -> Result<Vec<u8>, MarkdownConversionError> {
     options.validate()?;
+    if options.sections.is_none() && markdown.chars().all(js_whitespace) {
+        return Err(MarkdownConversionError::new(
+            "Invalid markdown input: Markdown must be a non-empty string",
+        ));
+    }
     enforce_input_length(markdown, options)?;
     if options.is_plain() {
         let mut document = parse::parse_markdown(markdown)?;
@@ -169,7 +179,6 @@ fn pack_with_metadata(
         let normalized = normalize_document_metadata(metadata)?;
         parts.metadata = Some(package_metadata(&normalized));
     }
-    paint_accessibility(&mut parts, options)?;
     package::pack(&parts)
 }
 
@@ -217,8 +226,9 @@ fn enforce_input_length(
         utf16_len(markdown)
     };
     if length > usize::try_from(max).unwrap_or(usize::MAX) {
-        return Err(MarkdownConversionError::new(
+        return Err(MarkdownConversionError::with_json_context(
             "Markdown input length exceeds maxInputLength",
+            serde_json::json!({"inputLength":length,"maxInputLength":max}),
         ));
     }
     Ok(())
@@ -226,6 +236,21 @@ fn enforce_input_length(
 
 fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
+}
+
+/// The characters JavaScript's `String.prototype.trim` removes.
+fn js_whitespace(ch: char) -> bool {
+    matches!(
+        ch,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
 }
 
 fn suppress_caption_field_update(options: &ConvertOptions) -> bool {
@@ -627,8 +652,30 @@ fn finish_patch_document(
     let mut parts = package::unpack(bytes)?;
     let xml = String::from_utf8(parts.document.clone())
         .map_err(|err| MarkdownConversionError::new(err.to_string()))?;
-    let rewritten =
-        renumber_caption_fields(&uniquify_bookmark_names(&share_heading_bookmarks(&xml)));
+    let rewritten = renumber_patch_bookmarks(&renumber_caption_fields(&uniquify_bookmark_names(
+        &share_heading_bookmarks(&xml),
+    )));
+    for name in [
+        "word/_rels/styles.xml.rels",
+        "word/_rels/numbering.xml.rels",
+    ] {
+        if !parts.extras.iter().any(|(path, _)| path == name) {
+            parts.extras.push((name.to_string(), br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec()));
+        }
+    }
+    if rewritten.contains(" TOC ")
+        && !String::from_utf8_lossy(parts.settings.as_deref().unwrap_or_default())
+            .contains("w:updateFields")
+    {
+        if let Some(settings) = parts.settings.as_mut() {
+            *settings = String::from_utf8_lossy(settings)
+                .replace(
+                    "</w:settings>",
+                    "<w:updateFields w:val=\"true\"/></w:settings>",
+                )
+                .into_bytes();
+        }
+    }
     let template_styles = zip_bytes(template, "word/styles.xml");
     let styles_changed = template_styles
         .as_ref()
@@ -636,18 +683,45 @@ fn finish_patch_document(
     if let Some(styles) = template_styles {
         parts.styles = styles;
     }
-    if rewritten == xml && !styles_changed {
-        return Ok(bytes.to_vec());
-    }
+    let _ = styles_changed;
     parts.document = rewritten.into_bytes();
     package::pack(&parts)
 }
 
-/// `prefix_bookmarks` keeps each donor's own `_Toc_{slug}_{n}`. Number the
-/// slug again in document order so the second `# Repeat` is `_Toc_Repeat_2`.
+fn renumber_patch_bookmarks(xml: &str) -> String {
+    let pattern = Regex::new(r"<w:bookmark(Start|End)\b[^>]*>").expect("bookmark tags");
+    let id_pattern = Regex::new(r#"w:id="([^"]*)""#).expect("bookmark ids");
+    let mut next = 0u32;
+    let mut open = BTreeMap::<String, std::collections::VecDeque<u32>>::new();
+    pattern
+        .replace_all(xml, |caps: &regex::Captures| {
+            let tag = &caps[0];
+            let Some(id) = id_pattern.captures(tag).map(|id| id[1].to_string()) else {
+                return tag.to_string();
+            };
+            let assigned = if &caps[1] == "Start" {
+                let value = next;
+                next += 1;
+                open.entry(id).or_default().push_back(value);
+                Some(value)
+            } else {
+                open.get_mut(&id).and_then(|ids| ids.pop_front())
+            };
+            match assigned {
+                Some(value) => id_pattern
+                    .replace(tag, format!("w:id=\"{value}\""))
+                    .into_owned(),
+                None => tag.to_string(),
+            }
+        })
+        .into_owned()
+}
+
+/// Heading counters are shared across patches, including different titles.
+/// Template bookmarks already have names and must retain those names.
 fn share_heading_bookmarks(xml: &str) -> String {
     let pattern = Regex::new(r#"w:name="([^"]+)""#).expect("bookmark name");
-    let mut next = BTreeMap::<String, u32>::new();
+    let mut next = 0u32;
     let mut output = String::new();
     let mut last = 0;
     for found in pattern.captures_iter(xml) {
@@ -657,12 +731,11 @@ fn share_heading_bookmarks(xml: &str) -> String {
         output.push_str(&xml[last..whole.start()]);
         let name = found.get(1).map(|value| value.as_str()).unwrap_or("");
         let renamed = match split_heading_bookmark(name) {
-            Some((prefix, slug, suffix)) => {
-                let assigned = next.entry(slug.clone()).or_insert(0);
-                *assigned += 1;
-                format!(r#"w:name="{prefix}_Toc_{slug}_{assigned}{suffix}""#)
+            Some((prefix, slug, suffix)) if prefix.starts_with("mdp") => {
+                next += 1;
+                format!(r#"w:name="{prefix}_Toc_{slug}_{next}{suffix}""#)
             }
-            None => whole.as_str().to_string(),
+            _ => whole.as_str().to_string(),
         };
         output.push_str(&renamed);
         last = whole.end();
@@ -803,6 +876,32 @@ fn merge_patch_metadata(
         .into_bytes();
     }
     parts.metadata = Some(merged);
+    let packed = package::pack(&parts)?;
+    let mut parts = package::unpack(&packed)?;
+    if let Some((_, core)) = parts
+        .extras
+        .iter_mut()
+        .find(|(name, _)| name == "docProps/core.xml")
+    {
+        let mut xml = String::from_utf8_lossy(core).into_owned();
+        for tag in ["cp:lastModifiedBy", "cp:revision"] {
+            if let Some(value) = element_text(&template_core, tag) {
+                if !xml.contains(&format!("<{tag}")) {
+                    xml = xml.replace(
+                        "</cp:coreProperties>",
+                        &format!(
+                            "<{tag}>{}</{tag}></cp:coreProperties>",
+                            value
+                                .replace('&', "&amp;")
+                                .replace('<', "&lt;")
+                                .replace('>', "&gt;")
+                        ),
+                    );
+                }
+            }
+        }
+        *core = xml.into_bytes();
+    }
     package::pack(&parts)
 }
 
@@ -926,143 +1025,6 @@ fn parse_custom_properties(xml: &str) -> Vec<(String, String)> {
             Some((name, value))
         })
         .collect()
-}
-
-struct SectionPaint {
-    language: Option<String>,
-    rtl: bool,
-}
-
-fn paint_accessibility(
-    parts: &mut ooxml::Parts,
-    options: &ConvertOptions,
-) -> Result<(), MarkdownConversionError> {
-    let document_language = options
-        .style
-        .as_ref()
-        .and_then(|style| style.language.clone())
-        .or_else(|| {
-            options
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.language.clone())
-        });
-    let document_rtl = matches!(
-        options.style.as_ref().and_then(|style| style.direction),
-        Some(Direction::Rtl)
-    );
-    let section_paints = section_paints(options, document_language.clone(), document_rtl);
-    let needs_paint = document_language.is_some()
-        || document_rtl
-        || section_paints
-            .iter()
-            .any(|section| section.language.is_some() || section.rtl);
-    if !needs_paint {
-        return Ok(());
-    }
-    let styles = String::from_utf8(parts.styles.clone())
-        .map_err(|err| MarkdownConversionError::new(err.to_string()))?;
-    parts.styles =
-        paint_style_language(&styles, document_language.as_deref(), document_rtl).into_bytes();
-    let document = String::from_utf8(parts.document.clone())
-        .map_err(|err| MarkdownConversionError::new(err.to_string()))?;
-    parts.document = paint_document_language(&document, &section_paints).into_bytes();
-    Ok(())
-}
-
-fn section_paints(
-    options: &ConvertOptions,
-    document_language: Option<String>,
-    document_rtl: bool,
-) -> Vec<SectionPaint> {
-    let Some(sections) = &options.sections else {
-        return vec![SectionPaint {
-            language: document_language,
-            rtl: document_rtl,
-        }];
-    };
-    if sections.is_empty() {
-        return vec![SectionPaint {
-            language: document_language,
-            rtl: document_rtl,
-        }];
-    }
-    sections
-        .iter()
-        .map(|section| {
-            let style = section.config.style.as_ref();
-            SectionPaint {
-                language: style
-                    .and_then(|style| style.language.clone())
-                    .or_else(|| document_language.clone()),
-                rtl: match style.and_then(|style| style.direction) {
-                    Some(Direction::Rtl) => true,
-                    Some(Direction::Ltr) => false,
-                    None => document_rtl,
-                },
-            }
-        })
-        .collect()
-}
-
-fn paint_style_language(styles: &str, language: Option<&str>, rtl: bool) -> String {
-    let mut styles = styles.to_string();
-    if let Some(language) = language {
-        let element = lang_element(language, rtl);
-        styles = insert_once(&styles, "<w:rPr>", &element);
-        if !styles.contains("<w:outlineLvl w:val=\"1\"/>") {
-            styles = insert_once(&styles, "<w:pPr>", "<w:outlineLvl w:val=\"1\"/>");
-        }
-    }
-    styles
-}
-
-fn paint_document_language(document: &str, sections: &[SectionPaint]) -> String {
-    let mut chunks = Vec::new();
-    let mut rest = document;
-    while let Some(index) = rest.find("</w:sectPr>") {
-        let end = index + "</w:sectPr>".len();
-        chunks.push(rest[..end].to_string());
-        rest = &rest[end..];
-    }
-    if !rest.is_empty() {
-        chunks.push(rest.to_string());
-    }
-    let section_at = chunks
-        .iter()
-        .enumerate()
-        .filter(|(_, chunk)| chunk.contains("</w:sectPr>"))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    if section_at.len() != sections.len() {
-        return paint_chunk(document, sections.first());
-    }
-    for (ordinal, chunk_index) in section_at.iter().enumerate() {
-        chunks[*chunk_index] = paint_chunk(&chunks[*chunk_index], sections.get(ordinal));
-    }
-    chunks.concat()
-}
-
-fn paint_chunk(chunk: &str, section: Option<&SectionPaint>) -> String {
-    let Some(section) = section else {
-        return chunk.to_string();
-    };
-    let mut chunk = chunk.to_string();
-    if let Some(language) = &section.language {
-        chunk = insert_once(&chunk, "<w:rPr>", &lang_element(language, section.rtl));
-    }
-    if section.rtl {
-        chunk = insert_once(&chunk, "<w:pPr>", "<w:bidi/><w:rtl/>");
-    }
-    chunk
-}
-
-fn lang_element(language: &str, rtl: bool) -> String {
-    if rtl {
-        format!(r#"<w:lang w:val="{language}" w:bidi="{language}"/>"#)
-    } else {
-        format!(r#"<w:lang w:val="{language}"/>"#)
-    }
 }
 
 fn insert_once(xml: &str, needle: &str, insertion: &str) -> String {

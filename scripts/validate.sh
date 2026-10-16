@@ -11,3 +11,4 @@ npm ci --prefix crates/md-to-docx-napi
 npm run build --prefix crates/md-to-docx-napi
 npm test --prefix crates/md-to-docx-napi
 npm run test:types --prefix crates/md-to-docx-napi
+python3 -I -m unittest discover -s scripts/parity -p 'test_*.py'

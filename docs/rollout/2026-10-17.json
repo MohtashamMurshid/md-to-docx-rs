@@ -1,0 +1,145 @@
+{
+  "date": "2026-10-17",
+  "reader": {
+    "reader": "Microsoft Word",
+    "version": "16.91",
+    "cases": 6,
+    "pages_per_engine": 10,
+    "raster_longest_side_pixels": 1600
+  },
+  "cases": [
+    {
+      "name": "consumer-basic",
+      "ts_pages": 2,
+      "rs_pages": 2,
+      "docx_sha256": {
+        "ts": "f4efa73cf6eb7c92b19fd51af27cf37f6ca089ae8cf01e6f9444fd93d80a2f4e",
+        "rs": "8be5a119be90bb643ee9c7ba88f239e8d72c739e6d3fde914326a75229484b29"
+      },
+      "canonical_package_equal": true,
+      "raster_pixels_equal": true,
+      "pdf_text_equal": true
+    },
+    {
+      "name": "consumer-report",
+      "ts_pages": 1,
+      "rs_pages": 1,
+      "docx_sha256": {
+        "ts": "2333bb957e021dcabb00e5ef9d6f88f35844c1ee4fb11780c4951888705e148e",
+        "rs": "f94e3129b2e1786f50e4140a29371625b120a5c03b59538a14159d49fbf3c068"
+      },
+      "canonical_package_equal": true,
+      "raster_pixels_equal": true,
+      "pdf_text_equal": true
+    },
+    {
+      "name": "consumer-documentation",
+      "ts_pages": 2,
+      "rs_pages": 2,
+      "docx_sha256": {
+        "ts": "3b36b52e9015e4549186a9e34fc6584b7259a6081945c5caf3119a80af139ba9",
+        "rs": "3fe87d39d880705326c18d2c818333f3b54eb66a6a7884821ea8832fedc9910a"
+      },
+      "canonical_package_equal": true,
+      "raster_pixels_equal": true,
+      "pdf_text_equal": true
+    },
+    {
+      "name": "project-readme",
+      "ts_pages": 3,
+      "rs_pages": 3,
+      "docx_sha256": {
+        "ts": "1588c0636300ad5234e70de55b8908ec86f656ffa8245f4b9038feb0e0bdbff9",
+        "rs": "ca03189b6dc181bf89192be7a587eda6011d562c2d19e6eda28c3e3de4634bae"
+      },
+      "canonical_package_equal": true,
+      "raster_pixels_equal": true,
+      "pdf_text_equal": true
+    },
+    {
+      "name": "reference-report",
+      "ts_pages": 1,
+      "rs_pages": 1,
+      "docx_sha256": {
+        "ts": "22717aed041ea66a2bdcce16b207e507f7b97e52492ae918653992d685f908f8",
+        "rs": "0e2800cd1414f6f075c0e722f0dd42d182ec2e4dacec0d0c1aaa51f5c4fc90a2"
+      },
+      "canonical_package_equal": true,
+      "raster_pixels_equal": true,
+      "pdf_text_equal": true
+    },
+    {
+      "name": "patched-report",
+      "ts_pages": 1,
+      "rs_pages": 1,
+      "docx_sha256": {
+        "ts": "7f5c6782bd7ee7c92a6c5bd9d93b27256dde937686aa61fb023698bf21cc9a9b",
+        "rs": "7eaedead0bd50e6cfdb531f1505779b1797b8595565074774c8631626e87a21a"
+      },
+      "canonical_package_equal": true,
+      "raster_pixels_equal": true,
+      "pdf_text_equal": true
+    }
+  ],
+  "consumer_trial": {
+    "application": "Neetprep",
+    "branch": "codex/rust-docx-trial",
+    "original_working_changes_preserved": true,
+    "production_build": "passed",
+    "browser_export": {
+      "rust": {
+        "status": 200,
+        "download_bytes": 7823
+      },
+      "typescript_rollback": {
+        "status": 200,
+        "download_bytes": 9866
+      }
+    },
+    "chat_source": "local browser fixture; no AI API call",
+    "legacy_version": "1.0.0",
+    "target_version": "4.0.1",
+    "rollback_route_checks": {
+      "rollback_engine": "typescript",
+      "rollback_status": 200,
+      "invalid_requests": [
+        400,
+        400,
+        400,
+        413
+      ]
+    },
+    "v4_canonical_packages_equal": true,
+    "v1_word_pages": {
+      "typescript": 1,
+      "native": 1,
+      "pixels_equal": false
+    },
+    "v1_visible_differences": [
+      "Centered heading becomes left aligned",
+      "Raw fenced code becomes a styled code block",
+      "Body sizing and spacing change",
+      "Page number footer is added"
+    ]
+  },
+  "candidate": {
+    "version": "0.1.0-rc.4",
+    "platform": "darwin",
+    "arch": "arm64",
+    "integrity": "sha512-A343ZDMmGzx9JMdm8BCFSTrzryp3G1x09rjcYVbquVC5xem40ggBRQugY7VVL0b04QZkvhqM6EjF6Ad1as5mUA==",
+    "sha256": "2c605b4522e46fbbdebbcce70caff350f31e7645924d7e86f46d64f7abf8b8f9",
+    "binary_sha256": "4310b350f5514f6b1f13a5437e620b08c248c0ece45170f58a37cbe374d58cd2"
+  },
+  "checks": {
+    "rust_tests": 371,
+    "node_tests": 24,
+    "node_versions": [
+      "20.10.0",
+      "22.14.0",
+      "24.18.0"
+    ],
+    "comparator_tests": 6,
+    "benchmark_output_checks": 35,
+    "hosted_ci_run": false
+  }
+}

@@ -2,7 +2,7 @@
 
 Rust port of [@mohtasham/md-to-docx](https://github.com/MohtashamMurshid/md-to-docx). It parses Markdown, writes WordprocessingML, and returns a ZIP-based `.docx` package.
 
-The workspace contains a Rust library, a CLI, and a Node-API addon. It is still a port in progress. Check the [compatibility notes](docs/compatibility.md) before migrating an application that uses plugins, renderer callbacks, reference documents, or patches.
+The workspace contains a Rust library, a CLI, and a Node-API addon. The native Node path matches 1,747 of 1,756 canonical package cases, with nine documented differences. Check the [compatibility notes](docs/compatibility.md) before migrating an application that uses plugins, renderer callbacks, reference documents, or patches.
 
 ## Build
 
@@ -53,7 +53,7 @@ Use `--help` for flags and combinations. Binary stdout uses `-` as the output pa
 
 ## Node addon
 
-Requires Node.js 20.9 or newer.
+Requires Node.js 20.10 or Node.js 22 and newer.
 
 Install the compatibility dependency, then build the native binary for the current OS and architecture:
 
@@ -72,7 +72,7 @@ await writeFile("report.docx", bytes);
 JS
 ```
 
-`convertMarkdownToDocx` returns a `Blob`; the ArrayBuffer and Buffer variants return their named types. Native conversions run off the event loop. JavaScript image, chart and Mermaid callbacks are supported by the native bridge.
+`convertMarkdownToDocx` returns a `Blob`; the ArrayBuffer and Buffer variants return their named types. Native conversions run off the event loop. JavaScript image, chart and Mermaid callbacks are supported by the native bridge. Node syntax highlighting uses lowlight through that bridge; the Rust library and CLI use Syntect.
 
 Existing JavaScript plugins and other APIs that require remark or `docx` objects use the pinned TypeScript compatibility path. The browser conditional export also uses the original browser implementation. These paths are not native Rust and are not covered by the native performance figures. See [compatibility](docs/compatibility.md) for dispatch rules and remaining differences.
 

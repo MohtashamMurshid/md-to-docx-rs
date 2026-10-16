@@ -37,7 +37,7 @@ fn typescript_and_tsx_colors_reach_document_runs() {
         let paragraphs = doc.paragraphs();
         let paragraph = paragraphs
             .iter()
-            .find(|p| p.text.contains(source))
+            .find(|p| p.text.replace('\u{a0}', " ").contains(source))
             .expect("source survives");
         for (token, expected) in tokens {
             assert!(

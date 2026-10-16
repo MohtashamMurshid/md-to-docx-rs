@@ -57,13 +57,15 @@ pub fn patch_placeholders(
     template: &[u8],
     patches: &[(&str, &[u8])],
 ) -> Result<Vec<u8>, crate::error::MarkdownConversionError> {
-    patch_placeholders_with_options(template, patches, &ConvertOptions::default())
+    patch_placeholders_with_options(template, patches, &ConvertOptions::default(), None, None)
 }
 
 pub(crate) fn patch_placeholders_with_options(
     template: &[u8],
     patches: &[(&str, &[u8])],
     options: &ConvertOptions,
+    delimiters: Option<&crate::options::PlaceholderDelimiters>,
+    toc_width: Option<u32>,
 ) -> Result<Vec<u8>, crate::error::MarkdownConversionError> {
     options.validate()?;
     validate_patches(patches)?;
@@ -73,9 +75,17 @@ pub(crate) fn patch_placeholders_with_options(
     }
 
     let package = read_package(template)?;
-    let hits = find_hits(&package, patches);
+    let hits = find_hits(&package, patches, delimiters);
     if hits.is_empty() {
-        return Ok(template.to_vec());
+        let mut package = package;
+        // The upstream patcher imports donor definitions even without a hit.
+        for (_, text) in &markdown {
+            let donor = read_package(&convert_with_options(text, options)?)?;
+            let offsets = offsets_from(&package);
+            let prefix = unused_prefix(&package);
+            merge_donor(&mut package, &donor, &prefix, &offsets, "word/document.xml")?;
+        }
+        return write_package(&package);
     }
 
     let mut package = package;
@@ -90,11 +100,19 @@ pub(crate) fn patch_placeholders_with_options(
     let mut ranges: BTreeMap<String, Vec<(usize, usize, String)>> = BTreeMap::new();
     let mut xmlns_donor: BTreeMap<String, String> = BTreeMap::new();
 
+    let tabs = Regex::new(r#"(<w:tab\b[^>]*w:pos=")[^"]*"#).expect("TOC tab position");
     for hit in &hits {
         let marker = boundary_marker(hit.patch_index, &mut counter);
         let text = &markdown[hit.patch_index].1;
         let donor_bytes = convert_with_options(text, options)?;
-        let donor = read_package(&donor_bytes)?;
+        let mut donor = read_package(&donor_bytes)?;
+        let document = donor_document(&donor)?;
+        let tab = format!("${{1}}{}", toc_width.unwrap_or(9000));
+        put(
+            &mut donor,
+            "word/document.xml",
+            tabs.replace_all(&document, tab).into_owned().into_bytes(),
+        );
         let prefix = unused_prefix(&package);
         let offsets = offsets_from(&package);
         let fragment = donor_fragment(&donor, &marker, &prefix, &offsets)?;
@@ -200,7 +218,11 @@ fn boundary_marker(index: usize, counter: &mut u64) -> String {
     format!("MDPATCH_BOUNDARY_{index}_{value}")
 }
 
-fn find_hits(package: &Package, patches: &[(&str, &[u8])]) -> Vec<Hit> {
+fn find_hits(
+    package: &Package,
+    patches: &[(&str, &[u8])],
+    delimiters: Option<&crate::options::PlaceholderDelimiters>,
+) -> Vec<Hit> {
     let mut used = BTreeSet::new();
     let mut hits = Vec::new();
     for name in &package.order {
@@ -216,7 +238,7 @@ fn find_hits(package: &Package, patches: &[(&str, &[u8])]) -> Vec<Hit> {
                 if used.contains(placeholder) {
                     continue;
                 }
-                if text.contains(&placeholder_token(placeholder)) {
+                if text.contains(&placeholder_token(placeholder, delimiters)) {
                     used.insert(*placeholder);
                     hits.push(Hit {
                         part: name.clone(),
@@ -232,8 +254,13 @@ fn find_hits(package: &Package, patches: &[(&str, &[u8])]) -> Vec<Hit> {
     hits
 }
 
-fn placeholder_token(name: &str) -> String {
-    format!("{START_DELIM}{name}{END_DELIM}")
+fn placeholder_token(
+    name: &str,
+    delimiters: Option<&crate::options::PlaceholderDelimiters>,
+) -> String {
+    let start = delimiters.map_or(START_DELIM, |value| value.start.as_str());
+    let end = delimiters.map_or(END_DELIM, |value| value.end.as_str());
+    format!("{start}{name}{end}")
 }
 
 fn is_story_part(name: &str) -> bool {
@@ -654,7 +681,6 @@ fn prefix_bookmarks(xml: &str, prefix: &str) -> String {
             }
         }
     }
-    names.sort_by_key(|name| std::cmp::Reverse(name.len()));
     let mut map = BTreeMap::new();
     for (index, name) in names.iter().enumerate() {
         let stem = name.chars().take(24).collect::<String>();
