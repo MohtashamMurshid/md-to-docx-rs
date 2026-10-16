@@ -9,6 +9,17 @@ import {
 } from "../index.js";
 
 const mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+// Separate conversions may cross a ZIP timestamp boundary. Compare every
+// unpacked part, including metadata and media, without ignoring content bytes.
+async function checkPackageContents(actual, expected) {
+  const [a, b] = await Promise.all([parts(actual), parts(expected)]);
+  assert.deepEqual(Object.keys(a.files).sort(), Object.keys(b.files).sort());
+  for (const name of Object.keys(a.files)) {
+    assert.equal(a.files[name].dir, b.files[name].dir, name);
+    assert.deepEqual(await a.files[name].async("nodebuffer"), await b.files[name].async("nodebuffer"), name);
+  }
+}
+
 async function checkOutputs(functions, args) {
   const blob = await functions[0](...args);
   const array = await functions[1](...args);
@@ -17,12 +28,12 @@ async function checkOutputs(functions, args) {
   assert.equal(blob.type, mime);
   assert.ok(array instanceof ArrayBuffer);
   assert.ok(Buffer.isBuffer(buffer));
-  assert.deepEqual(Buffer.from(await blob.arrayBuffer()), buffer);
-  assert.deepEqual(Buffer.from(array), buffer);
+  await checkPackageContents(Buffer.from(await blob.arrayBuffer()), buffer);
+  await checkPackageContents(Buffer.from(array), buffer);
   assert.equal(buffer.subarray(0, 2).toString(), "PK");
 }
 
-test("conversion returns the advertised output types and identical DOCX bytes", async () => {
+test("conversion returns the advertised output types and identical DOCX parts", async () => {
   await checkOutputs([convertMarkdownToDocx, convertMarkdownToArrayBuffer, convertMarkdownToBuffer], ["# Hello\n\nWorld"]);
 });
 
@@ -73,11 +84,24 @@ test("AbortSignal rejects before conversion and while worker conversion runs", a
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=", "base64");
 async function parts(bytes) {
   const { default: JSZip } = await import("jszip");
-  return JSZip.loadAsync(bytes);
+  return JSZip.loadAsync(bytes, { checkCRC32: true });
 }
 async function documentText(bytes) {
   return (await parts(bytes)).file("word/document.xml").async("string");
 }
+
+test("output comparison accepts ZIP timestamp changes and rejects changed document parts", async () => {
+  const bytes = await convertMarkdownToBuffer("# Package contents");
+  const zip = await parts(bytes);
+  for (const entry of Object.values(zip.files)) entry.date = new Date("2001-01-01T00:00:00Z");
+  const repacked = await zip.generateAsync({ type: "nodebuffer" });
+  assert.notDeepEqual(repacked, bytes);
+  await checkPackageContents(repacked, bytes);
+  const xml = await zip.file("word/document.xml").async("string");
+  zip.file("word/document.xml", xml.replace("Package contents", "Changed contents"), { createFolders: false });
+  const changed = await zip.generateAsync({ type: "nodebuffer" });
+  await assert.rejects(checkPackageContents(changed, bytes), { message: /word\/document\.xml/ });
+});
 
 test("native image resolver awaits async JavaScript and embeds its bytes", async () => {
   const calls = [];

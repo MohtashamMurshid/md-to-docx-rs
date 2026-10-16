@@ -50,7 +50,7 @@ The first run caught a multi-heading patch bookmark counter bug. The fix uses a 
 
 Full-page images, PDFs, contact sheets, DOCX hashes and validation results are in `output/rollout-documents-final/`. The separate comparison against Neetprep's v1 is in `output/consumer-trial/legacy-comparison/`. Word was tested on this host only; LibreOffice was not tested.
 
-The complete corpus now has 1,756 cases: 1,747 canonical matches with PNG bytes, 1,750 with decoded pixels, and zero unexpected differences. All nine reviewed differences remain documented. Local checks passed with 375 Rust tests, 24 Node tests, six comparator tests, formatting, Clippy and consumer type checks. The full Node suite passed on 20.10, 22.14 and 24.18. Typed error context, cancellation reason identity and callback failures have dedicated coverage.
+The complete corpus now has 1,756 cases: 1,747 canonical matches with PNG bytes, 1,750 with decoded pixels, and zero unexpected differences. All nine reviewed differences remain documented. Local checks passed with 375 Rust tests, 25 Node tests, six comparator tests, formatting, Clippy and consumer type checks. The full Node suite passed on 20.10, 22.14 and 24.18. Typed error context, cancellation reason identity and callback failures have dedicated coverage.
 
 ## Candidate and release limits
 

@@ -104,7 +104,7 @@ python3 -I -m unittest discover -s scripts/parity -p 'test_*.py'
 The final checks passed locally on macOS ARM with Node 24.18.0:
 
 - 375 Rust tests, including twelve expanded-corpus regressions and the 46-test reference/patch suite with a live TypeScript oracle.
-- 24 Node tests and the TypeScript consumer check.
+- 25 Node tests and the TypeScript consumer check.
 - Workspace formatting, all-target Clippy with warnings denied, and `git diff --check`.
 - Six comparator tests covering spaces, namespace identity, prefix aliases, explicit timestamps, error classes and typed error context.
 - Full-package parity of 1,747/1,756 with media bytes, or 1,750/1,756 with decoded PNG pixels. The verifier found zero unexpected differences.

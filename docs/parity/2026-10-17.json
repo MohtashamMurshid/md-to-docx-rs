@@ -75,7 +75,7 @@
   ],
   "checks": {
     "rust_tests_passed": 375,
-    "node_tests_passed": 24,
+    "node_tests_passed": 25,
     "comparator_tests_passed": 6,
     "typecheck": "passed",
     "format": "passed",
@@ -88,7 +88,8 @@
     ],
     "error_contract_cases": 81,
     "release_benchmark_output_checks": 35,
-    "ci_followup": "First hosted run passed full Linux parity and eight native-package jobs; Windows Node 20.10 required explicit test-file discovery. See PR #1 for the rerun."
+    "ci_followup": "First hosted run passed full Linux parity and eight native-package jobs; Windows Node 20.10 required explicit test-file discovery. See PR #1 for the rerun.",
+    "output_family_comparison": "All package parts and CRCs checked; varying ZIP entry timestamps excluded. Regression accepts changed ZIP timestamps and rejects changed document.xml."
   },
   "limits": [
     "Canonical package comparison excludes ZIP compression and generated timestamps.",
