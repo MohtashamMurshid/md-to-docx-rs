@@ -32,7 +32,10 @@ assert.ok((await api.convertMarkdownWithReferenceDocxToBuffer("# Report", templa
 let pluginRan = false;
 await api.convertMarkdownToBuffer("Plugin", { plugins: [{ apiVersion: 1, name: "release.smoke", transformAst() { pluginRan = true; } }] });
 assert.ok(pluginRan, "bundled compatibility plugin did not run");
-await api.convertMarkdownToBuffer("```ts\nconst value: number = 1;\n```", { codeHighlighting: { enabled: true } });
+const highlighted = await api.convertMarkdownToBuffer("```ts\nconst value: number = 1;\n```", { codeHighlighting: { enabled: true } });
+const { default: JSZip } = await import(pathToFileURL(compatibility.resolve("jszip")));
+const highlightedXml = await (await JSZip.loadAsync(highlighted)).file("word/document.xml").async("string");
+assert.match(highlightedXml, /<w:color w:val="D73A49"\/>[^]*?<w:t[^>]*>const<\/w:t>/, "installed highlighter did not color the const keyword");
 const { default: sharp } = await import(pathToFileURL(compatibility.resolve("sharp")));
 const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "white" } }).png().toBuffer();
 await api.convertMarkdownToBuffer("![local](virtual:smoke)", { imageHandling: { resolve: async () => ({ data: png, contentType: "image/png" }) } });

@@ -286,6 +286,7 @@ fn email_autolink(chars: &[char], start: usize, prev: Option<char>) -> Option<(u
 /// `tokenizeDomain`. Returns the end of the domain.
 fn scan_domain(chars: &[char], start: usize) -> Option<usize> {
     let mut index = start;
+    let mut negative_trail_end = start;
     let mut seen = false;
     let mut underscore_last = false;
     let mut underscore_last_last = false;
@@ -293,7 +294,7 @@ fn scan_domain(chars: &[char], start: usize) -> Option<usize> {
         let ch = chars.get(index).copied();
         match ch {
             Some('.') | Some('_') => {
-                if is_trail(chars, index) {
+                if is_trail(chars, index, &mut negative_trail_end) {
                     break;
                 }
                 if ch == Some('_') {
@@ -323,6 +324,7 @@ fn scan_domain(chars: &[char], start: usize) -> Option<usize> {
 /// `tokenizePath`. Returns the end of the path.
 fn scan_path(chars: &[char], start: usize) -> usize {
     let mut index = start;
+    let mut negative_trail_end = start;
     let mut open = 0usize;
     let mut close = 0usize;
     while let Some(ch) = chars.get(index).copied() {
@@ -353,7 +355,7 @@ fn scan_path(chars: &[char], start: usize) -> usize {
                 | '_'
                 | '~'
         ) {
-            if is_trail(chars, index) {
+            if is_trail(chars, index, &mut negative_trail_end) {
                 break;
             }
             if ch == ')' {
@@ -372,8 +374,11 @@ fn scan_path(chars: &[char], start: usize) -> usize {
 
 /// `tokenizeTrail`: true when everything from `index` to the next end is
 /// trailing punctuation that stays outside the link.
-fn is_trail(chars: &[char], mut index: usize) -> bool {
-    loop {
+fn is_trail(chars: &[char], mut index: usize, negative_end: &mut usize) -> bool {
+    if index < *negative_end {
+        return false;
+    }
+    let trailing = loop {
         match chars.get(index).copied() {
             Some('!' | '"' | '\'' | ')' | '*' | ',' | '.' | ':' | ';' | '?' | '_' | '~') => {
                 index += 1;
@@ -381,7 +386,7 @@ fn is_trail(chars: &[char], mut index: usize) -> bool {
             Some('&') => {
                 index += 1;
                 if !chars.get(index).is_some_and(|ch| ch.is_ascii_alphabetic()) {
-                    return false;
+                    break false;
                 }
                 while chars.get(index).is_some_and(|ch| ch.is_ascii_alphabetic()) {
                     index += 1;
@@ -389,22 +394,28 @@ fn is_trail(chars: &[char], mut index: usize) -> bool {
                 if chars.get(index) == Some(&';') {
                     index += 1;
                 } else {
-                    return false;
+                    break false;
                 }
             }
             Some(']') => {
                 index += 1;
                 match chars.get(index).copied() {
-                    None | Some('(') | Some('[') => return true,
-                    Some(ch) if ends_domain(Some(ch)) => return true,
+                    None | Some('(') | Some('[') => break true,
+                    Some(ch) if ends_domain(Some(ch)) => break true,
                     _ => {}
                 }
             }
-            Some('<') | None => return true,
-            Some(ch) if ends_domain(Some(ch)) => return true,
-            Some(_) => return false,
+            Some('<') | None => break true,
+            Some(ch) if ends_domain(Some(ch)) => break true,
+            Some(_) => break false,
         }
+    };
+    if !trailing {
+        // The stopping character was not consumed. A scan at that position
+        // can have a different result, e.g. the semicolon in an invalid "&;".
+        *negative_end = index;
     }
+    trailing
 }
 
 // ---------------------------------------------------------------------------
@@ -756,5 +767,33 @@ mod tests {
             vec![("hello world.".to_string(), None)]
         );
         assert_eq!(links("www"), vec![("www".to_string(), None)]);
+    }
+
+    #[test]
+    fn long_punctuation_runs_inside_links_finish_without_rescanning_suffixes() {
+        for punctuation in ["!", ".", "_"] {
+            let source = format!("http://a.b/{}x", punctuation.repeat(200_000));
+            let segments = split_autolinks(&source, None);
+            assert_eq!(segments.len(), 1);
+            assert_eq!(segments[0].url.as_deref(), Some(source.as_str()));
+        }
+        let domain = format!("http://a.{}b", ".".repeat(200_000));
+        assert_eq!(
+            split_autolinks(&domain, None)[0].url.as_deref(),
+            Some(domain.as_str())
+        );
+    }
+
+    #[test]
+    fn invalid_entities_do_not_hide_later_trailing_punctuation() {
+        for (source, expected) in [
+            ("http://a.b/!&;", "http://a.b/!&"),
+            ("http://a.b/!&word?", "http://a.b/!&word"),
+        ] {
+            assert_eq!(
+                split_autolinks(source, None)[0].url.as_deref(),
+                Some(expected)
+            );
+        }
     }
 }

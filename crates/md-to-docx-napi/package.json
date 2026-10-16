@@ -24,7 +24,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test test/*.test.mjs",
+    "test": "node scripts/test.mjs",
     "test:types": "tsc -p test/tsconfig.json"
   },
   "license": "MIT",

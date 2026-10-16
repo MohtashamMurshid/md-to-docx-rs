@@ -65,6 +65,7 @@ def inspect(path):
 def main():
     results = json.loads((OUT / "results.json").read_text())
     checks = []
+    skipped = []
     texts, summaries = {}, {}
     for case in results["results"]:
         name = case["case"]
@@ -83,13 +84,17 @@ def main():
             if name in ["plain-code", "highlighted-ts"]:
                 assert len(re.findall(r"export function compute\d+_\d+", text.replace("\u00a0", " "))) == 640
             if name == "highlighted-ts":
-                plain = summaries[f"plain-code-{engine}"]
-                assert stats["color_elements"] > plain["color_elements"] * 2
-                assert len(stats["distinct_colors"]) > len(plain["distinct_colors"])
-                normalized = text.replace("\u00a0", " ")
-                assert normalized == texts[f"plain-code-{engine}"].replace("\u00a0", " "), "highlighting changed code text beyond NBSP substitution"
+                plain = summaries.get(f"plain-code-{engine}")
+                if plain is not None:
+                    assert stats["color_elements"] > plain["color_elements"] * 2
+                    assert len(stats["distinct_colors"]) > len(plain["distinct_colors"])
+                    normalized = text.replace("\u00a0", " ")
+                    assert normalized == texts[f"plain-code-{engine}"].replace("\u00a0", " "), "highlighting changed code text beyond NBSP substitution"
+                else:
+                    assert len(stats["distinct_colors"]) > 1, "highlighting has no token colors"
+                    skipped.append(f"{key}: plain-code baseline absent; text comparison to unhighlighted output not performed")
                 stats["nonbreaking_spaces"] = text.count("\u00a0")
-                checks.append(f"{key}: actual token colors; all 640 functions preserved; text matches plain output after NBSP-to-space normalization")
+                checks.append(f"{key}: actual token colors; all 640 functions preserved" + ("; text matches plain output after NBSP-to-space normalization" if plain is not None else ""))
         ts = texts[f"{name}-typescript"]
         for engine in ["rust-node", "rust-core"]:
             key = f"{name}-{engine}"
@@ -117,6 +122,7 @@ def main():
             checks.append("chart: decoded RGBA pixels match TypeScript, Rust Node and Rust core exactly; plotted content is present")
     results["verification"] = {
         "passed_checks": checks,
+        "skipped_checks": skipped,
         "limitations": [
             "Concatenated Word text checks do not establish whitespace layout, numbering restart behavior, pagination or styling equivalence.",
             "Syntect and lowlight use different grammars and token/theme mappings.",

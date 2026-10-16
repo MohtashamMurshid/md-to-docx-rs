@@ -141,6 +141,35 @@ fn whitespace_footnote_labels_remain_literal() {
 }
 
 #[test]
+fn indented_display_math_keeps_ordered_list_numbering() {
+    let doc = convert("1. First\n\n   $$\n   x^2\n   $$\n\n2. Second", "{}");
+    let paragraphs = doc.paragraphs();
+    assert_eq!(paragraphs[0].text, "First");
+    assert_eq!(paragraphs[1].math[0].text, "x2");
+    assert_eq!(paragraphs[2].text, "Second");
+    assert_eq!(
+        paragraphs[0].list.as_ref().unwrap().num_id,
+        paragraphs[2].list.as_ref().unwrap().num_id
+    );
+}
+
+#[test]
+fn many_protected_urls_preserve_each_target_and_neighboring_text() {
+    let markdown = (0..2_000)
+        .map(|n| format!("https://example.com/{n}?a=1&b=*x*&c=2 tail{n}\n\n"))
+        .collect::<String>();
+    let doc = convert(&markdown, "{}");
+    assert_eq!(doc.paragraphs().len(), 2_000);
+    for (n, paragraph) in doc.paragraphs().iter().enumerate() {
+        assert_eq!(
+            paragraph.runs[0].link.as_deref(),
+            Some(format!("https://example.com/{n}?a=1&b=*x*&c=2").as_str())
+        );
+        assert!(paragraph.text.ends_with(&format!(" tail{n}")));
+    }
+}
+
+#[test]
 fn patch_respects_custom_delimiters_and_sets_toc_fields() {
     let template = convert_with_options("{{body}}", &ConvertOptions::default()).unwrap();
     let loaded = load_options_json(

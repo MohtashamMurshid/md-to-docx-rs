@@ -78,7 +78,7 @@ Verification checks ZIP integrity, XML parsing, content counts, token colors, im
 
 ## Full-package differential corpus
 
-The 1,754-case corpus includes 652 CommonMark examples, 677 GFM examples, feature and invalid-option inputs, reference/patch documents, and 150 seeded mixed documents. Each engine runs in a restartable subprocess with a 256 MiB JavaScript heap and a ten-second per-case timeout. Process failures are recorded in the index and do not abort the remaining corpus. Native memory is not included in the JavaScript heap cap.
+The 1,756-case corpus includes 652 CommonMark examples, 677 GFM examples, feature and invalid-option inputs, reference/patch documents, and 150 seeded mixed documents. Each engine runs in a restartable subprocess with a 256 MiB JavaScript heap and a ten-second per-case timeout. Process failures are recorded in the index and do not abort the remaining corpus. Native memory is not included in the JavaScript heap cap.
 
 ```sh
 npm run build --prefix crates/md-to-docx-napi
@@ -103,17 +103,17 @@ python3 -I -m unittest discover -s scripts/parity -p 'test_*.py'
 
 The final checks passed locally on macOS ARM with Node 24.18.0:
 
-- 371 Rust tests, including ten expanded-corpus regressions and the 46-test reference/patch suite with a live TypeScript oracle.
+- 375 Rust tests, including twelve expanded-corpus regressions and the 46-test reference/patch suite with a live TypeScript oracle.
 - 24 Node tests and the TypeScript consumer check.
 - Workspace formatting, all-target Clippy with warnings denied, and `git diff --check`.
 - Six comparator tests covering spaces, namespace identity, prefix aliases, explicit timestamps, error classes and typed error context.
-- Full-package parity of 1,745/1,754 with media bytes, or 1,748/1,754 with decoded PNG pixels. The verifier found zero unexpected differences.
+- Full-package parity of 1,747/1,756 with media bytes, or 1,750/1,756 with decoded PNG pixels. The verifier found zero unexpected differences.
 
 The recorded counts, environment and corpus hashes are in [the parity report](parity/2026-10-17.json).
 
 The empty-pattern process abort belongs to the TypeScript oracle. Native Rust completes that input. The worker isolation records the abort and continues to the next case.
 
-Six DOCX pairs were exported with Word 16.91, with identical text and rasterized pixels on all ten pages per engine. The Neetprep trial passed a production build, a browser download through Rust, and a second browser download through its TypeScript rollback route. The chat response was a local browser fixture, so the check used no model API. A fresh benchmark comparison and its limits are recorded in [performance](performance.md). Hosted Linux/macOS/Windows jobs are configured but were not run in this session. LibreOffice was not tested.
+Six DOCX pairs were exported with Word 16.91, with identical text and rasterized pixels on all ten pages per engine. The Neetprep trial passed a production build, a browser download through Rust, and a second browser download through its TypeScript rollback route. The chat response was a local browser fixture, so the check used no model API. A fresh benchmark comparison and its limits are recorded in [performance](performance.md). Hosted Linux/macOS/Windows jobs run on the PR. The first run passed Linux parity and eight package jobs; Windows Node 20.10 test discovery is fixed by explicit filenames. See [PR #1](https://github.com/MohtashamMurshid/md-to-docx-rs/pull/1) for current check status. LibreOffice was not tested.
 
 ## Release candidate and consumer trial
 

@@ -424,6 +424,7 @@ fn protect_math_fences(markdown: &str, enabled: bool) -> (Option<String>, String
                     .any(|range| range.contains(&(offset + indent))))
         {
             output.push('\n');
+            output.push_str(&line[..indent]);
             output.push_str(&fence);
             if !inside {
                 output.push_str(&language);
@@ -497,14 +498,38 @@ fn feed_text(
     text: &str,
     links: &[(String, crate::autolink::Segment)],
 ) -> Result<(), MarkdownConversionError> {
-    let mut remaining = text;
-    while let Some((offset, token, segment)) = links
-        .iter()
-        .filter_map(|(token, segment)| remaining.find(token).map(|offset| (offset, token, segment)))
-        .min_by_key(|(offset, _, _)| *offset)
-    {
-        if offset > 0 {
-            walker.on_event(Event::Text(remaining[..offset].to_string().into()))?;
+    let Some((first, _)) = links.first() else {
+        return walker.on_event(Event::Text(text.to_string().into()));
+    };
+    let prefix = first
+        .strip_suffix("0\u{e001}")
+        .expect("first protected link index");
+    let mut scanned = 0;
+    let mut emitted = 0;
+    while let Some(offset) = text[scanned..].find(prefix) {
+        let start = scanned + offset;
+        let digits = start + prefix.len();
+        let end = digits
+            + text[digits..]
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .count();
+        scanned = end;
+        if !text[end..].starts_with('\u{e001}') {
+            continue;
+        }
+        let Some((token, segment)) = text[digits..end]
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| links.get(index))
+        else {
+            continue;
+        };
+        if !text[start..].starts_with(token) {
+            continue;
+        }
+        if start > emitted {
+            walker.on_event(Event::Text(text[emitted..start].to_string().into()))?;
         }
         walker.on_start(Tag::Link {
             link_type: LinkType::Autolink,
@@ -514,10 +539,11 @@ fn feed_text(
         })?;
         walker.on_event(Event::Text(segment.text.clone().into()))?;
         walker.on_end(TagEnd::Link)?;
-        remaining = &remaining[offset + token.len()..];
+        emitted = start + token.len();
+        scanned = emitted;
     }
-    if !remaining.is_empty() {
-        walker.on_event(Event::Text(remaining.to_string().into()))?;
+    if emitted < text.len() {
+        walker.on_event(Event::Text(text[emitted..].to_string().into()))?;
     }
     Ok(())
 }

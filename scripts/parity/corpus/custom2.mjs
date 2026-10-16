@@ -11,6 +11,8 @@ const reference = () => new Uint8Array(readFileSync(referencePath));
 
 const cases = [];
 const add = (name, markdown, options, extra) => cases.push({ name: `y-${name}`, markdown, options, ...extra });
+add("math-in-ordered-list", "1. First\n\n   $$\n   x^2\n   $$\n\n2. Second", {});
+add("math-in-unordered-list", "- First\n\n  $$\n  x^2\n  $$\n\n- Second", {});
 
 // ---- option validation errors (message parity)
 const bad = (name, options, markdown = "# T\n\nbody") => add(`err-${name}`, markdown, options);

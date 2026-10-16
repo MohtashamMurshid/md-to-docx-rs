@@ -10,21 +10,21 @@
     "version": "4.0.1"
   },
   "corpus": {
-    "total": 1754,
+    "total": 1756,
     "commonmark": 652,
     "gfm": 677,
     "custom": 91,
-    "expanded": 334,
+    "expanded": 336,
     "seeded_random_in_expanded": 150,
     "sha256": {
       "commonmark.json": "d431b29d97b6f73e69d547109cf5081578fac931e72afe95639ebe766c1b2a20",
       "custom.mjs": "8a0090ac7c563dabacf49e7cabf9e793c8ff3b7566f5850145fd87887bbc9083",
-      "custom2.mjs": "7d112568cde3fa3862cab1f783924713286f2ceba1769a3eb11e1a22ca0fe8df",
+      "custom2.mjs": "dff2a61f4b53c5309dde99fb39361e20edfd9cfa8e71b41fe7a28658ec4186a9",
       "gfm.json": "b2c526cc2803ac07d864774b5a879930c1a4083915083150f11dbc571d084443"
     }
   },
-  "strict_canonical_packages_matching": 1745,
-  "decoded_png_canonical_packages_matching": 1748,
+  "strict_canonical_packages_matching": 1747,
+  "decoded_png_canonical_packages_matching": 1750,
   "unexpected_differences": 0,
   "known_differences": [
     {
@@ -74,7 +74,7 @@
     }
   ],
   "checks": {
-    "rust_tests_passed": 371,
+    "rust_tests_passed": 375,
     "node_tests_passed": 24,
     "comparator_tests_passed": 6,
     "typecheck": "passed",
@@ -87,7 +87,8 @@
       "24.18.0"
     ],
     "error_contract_cases": 81,
-    "release_benchmark_output_checks": 35
+    "release_benchmark_output_checks": 35,
+    "ci_followup": "First hosted run passed full Linux parity and eight native-package jobs; Windows Node 20.10 required explicit test-file discovery. See PR #1 for the rerun."
   },
   "limits": [
     "Canonical package comparison excludes ZIP compression and generated timestamps.",

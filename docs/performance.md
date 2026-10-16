@@ -6,7 +6,7 @@ The current comparison below measures the code after the compatibility fixes. Th
 
 Apple M3, eight logical CPUs, 16 GiB RAM, macOS ARM64, Node v24.18.0 and rustc 1.99.0 release. These measurements include the uncommitted compatibility and error-contract changes on base commit `582e9a8`. The benchmark records the dirty working-tree state. The 4.0.1 compatibility package uses docx 9.5.0, lowlight 3.3.0, Sharp 0.35.5 and KaTeX 0.18.2.
 
-Each engine receives the same saved Markdown and options. A fresh process performs two warmups followed by 12 measured conversions. Engines run sequentially in rotated order. Medians exclude imports and file I/O. Node syntax highlighting uses lowlight through the native callback bridge. Core Rust uses Syntect, so its highlighting time measures a different tokenizer.
+Each engine receives the same saved Markdown and options. A fresh process performs two warmups followed by 12 measured conversions. Engines run sequentially in rotated order. Medians exclude imports and file I/O. Engines are sampled in batches within each workload, so this run does not control for thermal or clock drift between those batches. Node syntax highlighting uses lowlight through the native callback bridge. Core Rust uses Syntect, so its highlighting time measures a different tokenizer.
 
 | Workload | TypeScript ms | Rust Node ms | Rust core ms | TS / Rust Node |
 | --- | ---: | ---: | ---: | ---: |
@@ -32,7 +32,7 @@ Peak memory comes from a separate fresh process converting once without warmup. 
 
 All 35 output checks passed, including ZIP/XML integrity, content counts, actual colored highlighting, chart dimensions and exact decoded chart pixels. Native Node highlighting matches the TypeScript text, run count and color set. Core highlighting remains a different implementation. Literal inline HTML is now preserved in both converters.
 
-Raw samples, fixture hashes, package versions, import times and first-conversion timings are in [the recorded results](benchmarks/2026-10-17.json). Reproduce with `scripts/benchmark/compare.py output/rollout-comparison` and `scripts/benchmark/validate_outputs.py output/rollout-comparison`. Word checks on smaller consumer documents are recorded separately in [the migration trial](migration-trial.md).
+Raw samples, fixture hashes, package versions, import times and first-conversion timings are in [the recorded results](benchmarks/2026-10-17.json). Reproduce with `scripts/benchmark/compare.py output/current-comparison` and `scripts/benchmark/validate_outputs.py output/current-comparison`. Word checks on smaller consumer documents are recorded separately in [the migration trial](migration-trial.md).
 
 ## Earlier macOS comparison, 12 October 2026
 

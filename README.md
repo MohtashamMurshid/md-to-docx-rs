@@ -2,7 +2,7 @@
 
 Rust port of [@mohtasham/md-to-docx](https://github.com/MohtashamMurshid/md-to-docx). It parses Markdown, writes WordprocessingML, and returns a ZIP-based `.docx` package.
 
-The workspace contains a Rust library, a CLI, and a Node-API addon. The native Node path matches 1,745 of 1,754 canonical package cases, with nine documented differences. Check the [compatibility notes](docs/compatibility.md) before migrating an application that uses plugins, renderer callbacks, reference documents, or patches.
+The workspace contains a Rust library, a CLI, and a Node-API addon. The native Node path matches 1,747 of 1,756 canonical package cases, with nine documented differences. Check the [compatibility notes](docs/compatibility.md) before migrating an application that uses plugins, renderer callbacks, reference documents, or patches.
 
 ## Build
 

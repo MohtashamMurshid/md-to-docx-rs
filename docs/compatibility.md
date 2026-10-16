@@ -19,15 +19,15 @@ The browser export is not WebAssembly. JavaScript plugins do not use the native 
 
 ## Measured package parity
 
-On 2026-10-17, the differential corpus compared 1,754 inputs through TypeScript 4.0.1 and the native Node API.
+On 2026-10-17, the differential corpus compared 1,756 inputs through TypeScript 4.0.1 and the native Node API.
 
 | Corpus | Matching canonical packages |
 | --- | ---: |
 | CommonMark examples | 652 / 652 |
 | GFM examples | 677 / 677 |
-| Feature, validation, reference, patch and seeded random cases | 416 / 425 |
-| Total with exact embedded media bytes | 1,745 / 1,754, or 99.49% |
-| Total comparing decoded PNG RGBA pixels | 1,748 / 1,754, or 99.66% |
+| Feature, validation, reference, patch and seeded random cases | 418 / 427 |
+| Total with exact embedded media bytes | 1,747 / 1,756, or 99.49% |
+| Total comparing decoded PNG RGBA pixels | 1,750 / 1,756, or 99.66% |
 
 Comparison covers every package part. It resolves relationship IDs and media filenames, ignores XML property ordering where appropriate, and removes generated timestamps. Explicitly supplied timestamps, XML namespaces and text spaces remain significant. ZIP compression and entry ordering are not compared. Error cases compare success versus failure, error class, message and JSON context values, including number and boolean types. Dedicated contract tests cover 81 error and boundary inputs plus cancellation reason identity and asynchronous chart failures.
 
@@ -43,7 +43,7 @@ The verifier checks decoded PNG equality for encoder exceptions and permits only
 
 ## Behavior covered by the fixes
 
-The native writer now matches default package parts, styles, numbering, settings, section properties, text-run boundaries, bookmarks, fields and resource relationships across the corpus. Coverage includes rich tables and spans, headers and footers, TOC variants, metadata, captions, footnotes, image budgets, reference documents, patches and 150 seeded mixed documents.
+The native writer now matches default package parts, styles, numbering, settings, section properties, text-run boundaries, bookmarks, fields and resource relationships across the corpus. Long punctuation runs in autolinks are scanned once, protected URL tokens are restored by index, and indented display math retains its list container. Coverage includes rich tables and spans, headers and footers, TOC variants, metadata, captions, footnotes, image budgets, reference documents, patches and 150 seeded mixed documents.
 
 The parser preserves literal inline HTML, code-span source text, GFM autolinks and task lists, and the `++underline++` extension. Its vendored pulldown-cmark changes cover intraword strike, dollar delimiter runs, footnote labels and partially consumed emphasis delimiters. See `crates/vendor/pulldown-cmark/VENDORED.md`.
 
@@ -61,6 +61,6 @@ Cancelling a native request rejects its JavaScript promise and discards the resu
 
 Math supports the original renderer's TeX subset. Word may need to update TOC, caption and cross-reference fields. Six consumer/reference document pairs were exported by Microsoft Word 16.91. All ten pages per engine have identical rasterized pixels and text after the patch-bookmark fix. This checks those documents on this reader and host; LibreOffice, other fonts and other operating systems were not tested. See [the migration trial](migration-trial.md).
 
-Browser consumers use the original browser implementation and its existing restrictions. Native binaries depend on OS and architecture; the local candidate is for macOS ARM64. CI now defines Linux, macOS and Windows checks on Node 20.10, 22 and 24, but those hosted jobs have not been run in this session. Node 20.9 fails Sharp's ESM import syntax, so the package now declares `^20.10.0 || >=22.0.0`.
+Browser consumers use the original browser implementation and its existing restrictions. Native binaries depend on OS and architecture; the local candidate is for macOS ARM64. CI now defines Linux, macOS and Windows checks on Node 20.10, 22 and 24, and the first hosted run passed the full Linux parity job and eight package jobs. Windows Node 20.10 exposed a wildcard test-discovery issue; the runner now passes explicit filenames. See [PR #1](https://github.com/MohtashamMurshid/md-to-docx-rs/pull/1) for current check status. Node 20.9 fails Sharp's ESM import syntax, so the package now declares `^20.10.0 || >=22.0.0`.
 
 Historical benchmark differences involving stripped `<u>` tags and highlighted-code ordinary spaces were corrected. A fresh 12-sample comparison with output checks is recorded in [performance](performance.md).

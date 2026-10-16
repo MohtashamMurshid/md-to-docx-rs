@@ -21,8 +21,11 @@ args = parser.parse_args()
 directory = args.directory.resolve()
 # Word's AppleScript document references can follow the active window. Keep
 # exports serial even when two comparison processes are started independently.
+(ROOT / "output").mkdir(exist_ok=True)
 lock = (ROOT / "output/.word-export.lock").open("w")
 fcntl.flock(lock, fcntl.LOCK_EX)
+previous_path = directory / "validation.json"
+previous = {entry["name"]: entry for entry in json.loads(previous_path.read_text())} if previous_path.exists() else {}
 entries = json.loads((directory / "index.json").read_text())
 word = subprocess.check_output(["osascript", "-e", 'tell application "Microsoft Word" to get version'], text=True).strip()
 all_pages = []
@@ -32,7 +35,9 @@ for entry in entries:
     for engine in ("ts", "rs"):
         document = directory / f'{entry["name"]}.{engine}.docx'
         pdf = document.with_suffix(".pdf")
-        if not args.reuse_pdf or not pdf.exists():
+        document_hash = hashlib.sha256(document.read_bytes()).hexdigest()
+        cached_hash = previous.get(entry["name"], {}).get(engine, {}).get("docx_sha256")
+        if not args.reuse_pdf or not pdf.exists() or document_hash != cached_hash:
             subprocess.run(["osascript", str(ROOT / "scripts/rollout/export-word.applescript"), str(document), str(pdf)], check=True, timeout=90)
         target = directory / "rendered" / f'{entry["name"]}.{engine}'
         target.mkdir(parents=True, exist_ok=True)
@@ -41,7 +46,7 @@ for entry in entries:
         subprocess.run(["pdftoppm", "-scale-to", "1600", "-png", str(pdf), str(target / "page")], check=True, stderr=subprocess.DEVNULL)
         subprocess.run(["pdftotext", "-layout", str(pdf), str(pdf.with_suffix(".txt"))], check=True)
         pages = sorted(target.glob("page-*.png"))
-        entry[engine].update(pages=len(pages), docx_sha256=hashlib.sha256(document.read_bytes()).hexdigest())
+        entry[engine].update(pages=len(pages), docx_sha256=document_hash)
         renders[engine] = pages
     a, b = renders["ts"], renders["rs"]
     entry["rendered_pages_equal"] = len(a) == len(b) and all(

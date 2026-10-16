@@ -50,7 +50,7 @@ The first run caught a multi-heading patch bookmark counter bug. The fix uses a 
 
 Full-page images, PDFs, contact sheets, DOCX hashes and validation results are in `output/rollout-documents-final/`. The separate comparison against Neetprep's v1 is in `output/consumer-trial/legacy-comparison/`. Word was tested on this host only; LibreOffice was not tested.
 
-The complete corpus now has 1,754 cases: 1,745 canonical matches with PNG bytes, 1,748 with decoded pixels, and zero unexpected differences. All nine reviewed differences remain documented. Local checks passed with 371 Rust tests, 24 Node tests, six comparator tests, formatting, Clippy and consumer type checks. The full Node suite passed on 20.10, 22.14 and 24.18. Typed error context, cancellation reason identity and callback failures have dedicated coverage.
+The complete corpus now has 1,756 cases: 1,747 canonical matches with PNG bytes, 1,750 with decoded pixels, and zero unexpected differences. All nine reviewed differences remain documented. Local checks passed with 375 Rust tests, 24 Node tests, six comparator tests, formatting, Clippy and consumer type checks. The full Node suite passed on 20.10, 22.14 and 24.18. Typed error context, cancellation reason identity and callback failures have dedicated coverage.
 
 ## Candidate and release limits
 
@@ -60,4 +60,4 @@ Fresh-install smoke checks verify those versions, output families, reference/pat
 
 The [fresh benchmarks](performance.md) report 12.5x for prose, 36.9x for lists, 10.6x for plain code, 5.5x for highlighted code and 117.3x for the chart on this host. Plugin conversions use TypeScript and establish no native speedup. All 35 output checks passed.
 
-Linux, macOS and Windows CI jobs now build, test, pack and install the candidate on Node 20.10, 22 and 24. Those hosted jobs have not run in this session. Produce and verify binaries on the deployment target before rolling this macOS trial into production. The candidate remains private and unpublished.
+Linux, macOS and Windows CI jobs now build, test, pack and install the candidate on Node 20.10, 22 and 24. The first hosted run passed Linux parity and eight package jobs. Windows Node 20.10 required explicit test-file discovery, which is included in the follow-up fix. See [PR #1](https://github.com/MohtashamMurshid/md-to-docx-rs/pull/1) for current check status. Produce and verify binaries on the deployment target before rolling this macOS trial into production. The candidate remains private and unpublished.
