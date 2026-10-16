@@ -1,6 +1,6 @@
 # Compatibility with TypeScript 4.0.1
 
-The package uses Rust for ordinary Node conversions and a pinned TypeScript compatibility path for APIs that depend on JavaScript's remark AST or `docx` objects. Matching signatures does not promise identical pagination, chart pixels, or ZIP bytes.
+This is a close replacement for the Node API, with documented differences. It is not a proven 100% drop-in replacement. Ordinary Node conversions use Rust; APIs that need JavaScript's remark AST or `docx` objects use the pinned TypeScript package.
 
 ## Which implementation runs
 
@@ -8,45 +8,59 @@ The package uses Rust for ordinary Node conversions and a pinned TypeScript comp
 | --- | --- |
 | Ordinary Node conversion, reference generation and patching | Native Rust, off the event loop |
 | JavaScript image resolver, chart renderer and Mermaid renderer | Native conversion with callbacks dispatched to JavaScript |
+| Node syntax highlighting | Native conversion with lowlight tokenization dispatched to JavaScript |
 | JavaScript plugins, function/RegExp text replacements, or warning callback | TypeScript 4.0.1 compatibility path |
 | Styled patch objects and string/promise reference inputs | TypeScript compatibility path |
 | `parseToDocxOptions` | TypeScript compatibility path, returning actual `docx` options |
 | Browser conditional export | TypeScript browser implementation |
-| Rust library and CLI | Native Rust; JavaScript functions cannot be loaded from CLI JSON |
+| Rust library and CLI | Native Rust, with Syntect highlighting and Rust callbacks |
 
-The browser export is not a Rust WebAssembly build. Plugin-bearing conversions do not inherit the native Rust benchmark results. Inspect `crates/md-to-docx-napi/index.js` for the dispatch rules.
+The browser export is not WebAssembly. JavaScript plugins do not use the native conversion benchmark path. The dispatch rules are in `crates/md-to-docx-napi/index.js`.
 
-## Fixed during this review
+## Measured package parity
 
-- The Node DOCX, ArrayBuffer and Buffer families now return `Blob`, `ArrayBuffer` and Node `Buffer`, including reference and patch functions.
-- Native Node work runs away from the event loop. Callback conversions use dedicated threads so callbacks awaiting filesystem work do not exhaust the libuv pool.
-- Image configuration reaches document conversion, reference generation and patching. The CLI resolves local images from the input directory and honors `--base-dir`. Image budgets restart for each conversion and remain shared across sections within it.
-- Bundled TypeScript and TSX grammars recognize `ts`, `typescript` and related aliases. Tests inspect colored Word runs, not just the highlighting option.
-- Native Rust AST transforms receive a mutable `model::Document`. Custom block handlers consume `Block::Custom` nodes inserted by those transforms. This Rust model is distinct from JavaScript mdast; existing JavaScript plugins use the compatibility path.
-- The CLI and Node binding use a shared JSON decoder.
-- The reference/patch oracle has pinned npm dependencies and a checked-in fixture. It no longer needs an adjacent TypeScript checkout.
-- Reference and patch calls apply their conversion settings rather than discarding them. Reference layout/header/footer flags are honored; patch limits also apply after plugin expansion.
-- Strict image alt-text settings survive option decoding. Custom chart renderers receive the resolved dimensions, including configured limits.
-- Internal regexes are cached, and accessibility metadata is written before ZIP packing instead of unpacking and recompressing it.
+On 2026-10-17, the differential corpus compared 1,754 inputs through TypeScript 4.0.1 and the native Node API.
 
-## Document coverage
+| Corpus | Matching canonical packages |
+| --- | ---: |
+| CommonMark examples | 652 / 652 |
+| GFM examples | 677 / 677 |
+| Feature, validation, reference, patch and seeded random cases | 416 / 425 |
+| Total with exact embedded media bytes | 1,745 / 1,754, or 99.49% |
+| Total comparing decoded PNG RGBA pixels | 1,748 / 1,754, or 99.66% |
 
-| Area | Qualification |
-| --- | --- |
-| Paragraphs, headings, links, formatting and lists | Semantic projection tests; OOXML and ZIP bytes can differ. |
-| Tables, spans and nested tables | Supported structures have regression tests. |
-| Math, footnotes, captions and cross-references | Math supports a TeX subset; field updates depend on the document reader. |
-| Sections, headers, footers, TOC and styles | Field TOCs may need updating in Word. |
-| Images and charts | Bounded image loading; remote images opt in. Chart appearance and PNG encoding can differ. |
-| Highlighting | Syntect instead of lowlight. Token boundaries and theme scope mappings can differ. |
-| Reference generation and patching | Live oracle tests inspect selected XML and package structures. |
+Comparison covers every package part. It resolves relationship IDs and media filenames, ignores XML property ordering where appropriate, and removes generated timestamps. Explicitly supplied timestamps, XML namespaces and text spaces remain significant. ZIP compression and entry ordering are not compared. Error cases compare success versus failure, error class, message and JSON context values, including number and boolean types. Dedicated contract tests cover 81 error and boundary inputs plus cancellation reason identity and asynchronous chart failures.
+
+The nine strict differences are reviewed in `scripts/parity/known-differences.json`:
+
+- Three cases contain differently encoded PNGs. SVG rasterization and all tested chart types have identical decoded pixels in these cases.
+- Three invalid-chart cases contain different JSON parser diagnostics. TypeScript uses V8's version-dependent message; Rust uses its native diagnostic. Both reject the same definitions.
+- An empty replacement search string makes TypeScript loop until its process exhausts the heap. Native Rust treats the empty pattern as a no-op.
+- A footnote reference inside a heading makes TypeScript emit a `bookmarkUniqueNumericId` element containing a function string. Rust emits a footnote reference and bookmark.
+- A bare `#` link makes TypeScript emit a dangling relationship ID. Rust emits an empty internal anchor.
+
+The verifier checks decoded PNG equality for encoder exceptions and permits only the reviewed difference classes for the other cases. It reports zero unexpected differences. These numbers describe this corpus, not a percentage of all possible Markdown or API behavior.
+
+## Behavior covered by the fixes
+
+The native writer now matches default package parts, styles, numbering, settings, section properties, text-run boundaries, bookmarks, fields and resource relationships across the corpus. Coverage includes rich tables and spans, headers and footers, TOC variants, metadata, captions, footnotes, image budgets, reference documents, patches and 150 seeded mixed documents.
+
+The parser preserves literal inline HTML, code-span source text, GFM autolinks and task lists, and the `++underline++` extension. Its vendored pulldown-cmark changes cover intraword strike, dollar delimiter runs, footnote labels and partially consumed emphasis delimiters. See `crates/vendor/pulldown-cmark/VENDORED.md`.
+
+Node highlighting uses the compatibility package's lowlight tokenizer through the callback bridge. Token boundaries, colors and nonbreaking-space substitutions match the tested TypeScript output. Rust and CLI highlighting use Syntect, so their token boundaries and colors can differ.
+
+Reference and patch conversion retain conversion settings. Patches honor custom delimiters, preserve metadata, import required definitions, renumber bookmarks and request TOC field updates. Generated documents can be reused as references without duplicate relationship IDs.
+
+The Node DOCX, ArrayBuffer and Buffer families return `Blob`, `ArrayBuffer` and Node `Buffer`, including reference and patch functions. Callback conversions use dedicated threads so callbacks can await filesystem work without exhausting the libuv pool.
 
 ## Remaining limits
 
-A native request cancelled through `AbortSignal` rejects its JavaScript promise and discards the result. An already-aborted request never starts. Cancelling a running request does not forcibly interrupt synchronous Rust computation or arbitrary user callbacks.
+The Rust model and callback types differ from JavaScript mdast. Existing JavaScript plugins use the compatibility path. Node errors preserve typed JSON context values. Rust callers retain the string-map accessor and can also read typed context through `context_json()`. This covers the tested contracts, not every possible user-thrown error.
 
-Rust calls are synchronous. Their trusted callback types operate on Rust values; the core crate cannot execute JavaScript plugins. The Node compatibility path preserves those JavaScript APIs at the cost of using the original implementation.
+Cancelling a native request rejects its JavaScript promise and discards the result. An already-aborted request never starts. Cancellation preserves the exact `signal.reason` object in `error.context.reason`. Cancellation does not forcibly interrupt synchronous Rust computation or arbitrary user callbacks.
 
-Browser consumers use the original browser implementation and its existing restrictions, including server-style remote image fetching. Native binaries are specific to OS and architecture; this repository builds one for the current machine rather than distributing prebuilt binaries for every target.
+Math supports the original renderer's TeX subset. Word may need to update TOC, caption and cross-reference fields. Six consumer/reference document pairs were exported by Microsoft Word 16.91. All ten pages per engine have identical rasterized pixels and text after the patch-bookmark fix. This checks those documents on this reader and host; LibreOffice, other fonts and other operating systems were not tested. See [the migration trial](migration-trial.md).
 
-Projection tests do not establish identical pagination, font substitution, or rendering in Word and LibreOffice. Compare representative documents in the readers your application supports before migrating. No Word or LibreOffice visual comparison was performed during this review.
+Browser consumers use the original browser implementation and its existing restrictions. Native binaries depend on OS and architecture; the local candidate is for macOS ARM64. CI now defines Linux, macOS and Windows checks on Node 20.10, 22 and 24, but those hosted jobs have not been run in this session. Node 20.9 fails Sharp's ESM import syntax, so the package now declares `^20.10.0 || >=22.0.0`.
+
+Historical benchmark differences involving stripped `<u>` tags and highlighted-code ordinary spaces were corrected. A fresh 12-sample comparison with output checks is recorded in [performance](performance.md).

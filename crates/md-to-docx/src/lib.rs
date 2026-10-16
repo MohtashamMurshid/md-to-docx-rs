@@ -3,6 +3,7 @@
 //! Convert Markdown with typed options, sections, images, math, plugins,
 //! reference documents, and placeholder patching.
 
+mod autolink;
 mod bookmarks;
 mod captions;
 mod charts;

@@ -676,8 +676,8 @@ fn ordinary_lists_have_no_task_markers() {
 //
 // Numbering start is the level's w:startOverride when Word would use one, and
 // otherwise w:start on the abstract numbering level. The Markdown markers are
-// 5, 3, and 0. The TypeScript docx serializer also writes startOverride 1 for a
-// zero start; this test expects the marker value 0.
+// 5, 3, and 0. The TypeScript docx serializer writes startOverride 1 for a
+// zero start, and so does this port.
 #[test]
 fn ordered_list_numbering_start() {
     let doc = convert(
@@ -694,7 +694,7 @@ End.
     let outer = assert_list(paragraphs[0], true, 5, 0);
     let inner = assert_list(paragraphs[1], true, 3, 1);
     assert!(paragraphs[2].list.is_none());
-    let zero = assert_list(paragraphs[3], true, 0, 0);
+    let zero = assert_list(paragraphs[3], true, 1, 0);
     assert_ne!(outer.num_id, inner.num_id);
     assert_ne!(inner.num_id, zero.num_id);
     assert_ne!(outer.num_id, zero.num_id);

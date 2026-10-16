@@ -761,7 +761,17 @@ fn project_container(
     let mut blocks = Vec::new();
     for node in elem_children(container) {
         match local(&node.name) {
-            "p" => blocks.push(Block::Paragraph(project_paragraph(node, numbering, rels))),
+            "p" => {
+                // Section breaks occupy a paragraph in docx's package. They
+                // carry no document content and are projected separately.
+                let section_only = child(node, "pPr")
+                    .and_then(|props| child(props, "sectPr"))
+                    .is_some()
+                    && elem_children(node).all(|element| local(&element.name) == "pPr");
+                if !section_only {
+                    blocks.push(Block::Paragraph(project_paragraph(node, numbering, rels)));
+                }
+            }
             "tbl" => blocks.push(Block::Table(project_table(node, numbering, rels))),
             "sdt" => {
                 if let Some(content) = child(node, "sdtContent") {

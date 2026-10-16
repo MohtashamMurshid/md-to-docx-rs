@@ -67,6 +67,7 @@ pub enum Block {
 /// placeholder paragraph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
+    pub failure: Option<ImageFailure>,
     pub bytes: Option<Vec<u8>>,
     pub content_type: String,
     pub width_px: u32,
@@ -74,6 +75,14 @@ pub struct Image {
     pub alt: String,
     pub title: Option<String>,
     pub url: String,
+}
+
+/// Why an image becomes a placeholder, including the two independent budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFailure {
+    Unavailable,
+    EmbedLimit,
+    RemoteBudget,
 }
 
 /// A paragraph of inline runs.

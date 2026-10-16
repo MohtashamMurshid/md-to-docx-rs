@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-
 const here = dirname(fileURLToPath(import.meta.url));
 
 function loadNative() {
@@ -47,7 +46,6 @@ function native() {
 }
 
 
-
 let compatibilityModule;
 function compatibility() {
   compatibilityModule ??= import("@mohtasham/md-to-docx");
@@ -62,6 +60,22 @@ function needsCompatibility(value, path = "options") {
   if (!value || typeof value !== "object" || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return false;
   if (path === "options" && ["plugins", "pluginOptions", "onWarning"].some(key => Object.hasOwn(value, key))) return true;
   return Object.keys(value).some(key => needsCompatibility(value[key], `${path}.${key}`));
+}
+
+let validationModule;
+function validateNativeInput(markdown, options) {
+  validationModule ??= import(new URL("dist/validation.js", import.meta.resolve("@mohtasham/md-to-docx/package.json")));
+  return validationModule.then(({ validateInput }) => {
+    try { validateInput(markdown, options ?? {}); }
+    catch (error) { throw normalizeError(error); }
+  });
+}
+
+function normalizeError(error) {
+  if (error?.name === "MarkdownConversionError" && !(error instanceof MarkdownConversionError)) {
+    return new MarkdownConversionError(error.message, error.context, { cause: error });
+  }
+  return error;
 }
 
 function chartInput(input, options, signal) {
@@ -109,10 +123,22 @@ async function invoke(name, markdown, reference, patches, options, type) {
       throw error;
     }
   }
+  if (options?.signal?.aborted) throw abortedError(options.signal);
+  if (patches === undefined) {
+    if (options !== undefined || typeof markdown !== "string") await validateNativeInput(markdown, options);
+  } else if (patches && typeof patches === "object") {
+    for (const patch of Object.values(patches)) {
+      const source = typeof patch === "string" ? patch : patch?.markdown;
+      if (typeof source === "string") await validateNativeInput(source, { ...options, sections: undefined, template: undefined });
+    }
+  }
   const callbacks = {
     image: typeof options?.imageHandling?.resolve === "function",
     chart: typeof options?.chartRendering?.renderer === "function",
     mermaid: typeof options?.mermaidRendering?.render === "function",
+    // Highlighting runs lowlight in JavaScript so token boundaries and theme
+    // colors match the TypeScript renderer exactly.
+    highlight: options?.codeHighlighting?.enabled === true,
   };
   const referenceBytes = reference === undefined ? undefined : await toBytes(reference);
   if (Object.values(callbacks).some(Boolean)) {
@@ -131,6 +157,10 @@ async function invoke(name, markdown, reference, patches, options, type) {
       if (input.kind === "image") result = await options.imageHandling.resolve(input.source, { maxBytes: input.maxBytes, signal });
       if (input.kind === "chart") result = await options.chartRendering.renderer(chartInput(input, options.chartRendering, signal));
       if (input.kind === "mermaid") result = await options.mermaidRendering.render({ code: input.code, meta: input.meta ?? undefined, signal });
+      if (input.kind === "highlight") {
+        const spans = await highlightSpans(input.code, input.language, options.codeHighlighting);
+        return spans ? JSON.stringify(spans) : "null";
+      }
       if (result == null) return "null";
       if (typeof result === "string") {
         if (input.kind !== "chart" || !/^data:image\/png;base64,/i.test(result)) throw new Error("chart renderer must return a PNG data URL or PNG bytes");
@@ -149,6 +179,49 @@ async function invoke(name, markdown, reference, patches, options, type) {
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+let codeHighlightModule;
+/** The compatibility package's lowlight wrapper, loaded from its install location. */
+function codeHighlight() {
+  codeHighlightModule ??= import(new URL("dist/utils/codeHighlight.js", import.meta.resolve("@mohtasham/md-to-docx/package.json")));
+  return codeHighlightModule;
+}
+
+/** `tokenizeToRuns` without the docx runs: `[{text, color}]`, or null for an unknown language. */
+async function highlightSpans(code, language, codeHighlighting) {
+  try {
+    const { getLowlightInstance, resolveTheme, DEFAULT_CODE_HIGHLIGHT_THEME } = await codeHighlight();
+    const lowlight = getLowlightInstance(codeHighlighting?.languages);
+    if (!lowlight.registered(language)) return null;
+    const tree = lowlight.highlight(language, code);
+    const theme = resolveTheme(codeHighlighting?.theme);
+    const spans = [];
+    const colorFor = stack => {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        const normalized = stack[i].startsWith("hljs-") ? stack[i].slice(5) : stack[i];
+        if (typeof theme[normalized] === "string") return theme[normalized];
+        const dot = normalized.indexOf(".");
+        if (dot > 0 && typeof theme[normalized.slice(0, dot)] === "string") return theme[normalized.slice(0, dot)];
+      }
+      return undefined;
+    };
+    const walk = (nodes, stack) => {
+      for (const node of nodes) {
+        if (node.type === "text") {
+          if (node.value.length > 0) spans.push({ text: node.value, color: colorFor(stack) || theme.default || DEFAULT_CODE_HIGHLIGHT_THEME.default || "24292E" });
+        } else if (node.type === "element") {
+          const className = node.properties?.className;
+          const classes = Array.isArray(className) ? className.filter(c => typeof c === "string") : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
+          walk(node.children, [...stack, ...classes]);
+        }
+      }
+    };
+    walk(tree.children, []);
+    return spans;
+  } catch {
+    return null;
+  }
+}
+
 export class MarkdownConversionError extends Error {
   constructor(message, context, options) {
     super(message, options);
@@ -158,7 +231,7 @@ export class MarkdownConversionError extends Error {
 }
 
 function abortedError(signal) {
-  return new MarkdownConversionError("Markdown conversion was aborted", { code: "ABORTED", reason: signal?.reason });
+  return new MarkdownConversionError("Markdown conversion was aborted", { reason: signal?.reason });
 }
 
 async function output(promise, type, options) {
@@ -182,7 +255,11 @@ async function output(promise, type, options) {
     const prefix = "MD_TO_DOCX_ERROR:";
     if (typeof error?.message === "string" && error.message.startsWith(prefix)) {
       const details = JSON.parse(error.message.slice(prefix.length));
-      throw new MarkdownConversionError(details.message, details.context, { cause: error });
+      const context = details.context ?? (details.message.startsWith("Failed to convert markdown to docx:") || details.message.startsWith("Invalid chart block:") ? { originalError: {} } : undefined);
+      if (context?.originalError && Object.keys(context.originalError).length === 0) {
+        context.originalError = new Error(details.message.replace(/^Failed to convert markdown to docx: /, ""));
+      }
+      throw new MarkdownConversionError(details.message, context, { cause: error });
     }
     if (error?.name === "MarkdownConversionError" && !(error instanceof MarkdownConversionError)) {
       throw new MarkdownConversionError(error.message, error.context, { cause: error });

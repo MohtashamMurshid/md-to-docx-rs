@@ -6,3 +6,6 @@ members = ["crates/md-to-docx", "crates/md-to-docx-cli", "crates/md-to-docx-napi
 edition = "2021"
 license = "MIT"
 publish = false
+
+[patch.crates-io]
+pulldown-cmark = { path = "crates/vendor/pulldown-cmark" }

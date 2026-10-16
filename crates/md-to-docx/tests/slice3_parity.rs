@@ -353,7 +353,7 @@ fn fenced_code_block_size() {
     assert_eq!(label.size, Some(20));
     assert_eq!(label.color.as_deref(), Some("666666"));
     assert_eq!(label.font.as_deref(), Some("Courier New"));
-    assert_eq!(label.fill.as_deref(), Some("F5F5F5"));
+    assert_eq!(label.fill.as_deref(), None);
     for text in [
         "function greet(name: string): string {",
         "\u{00a0}\u{00a0}return `Hello, ${name}!`;",
@@ -363,7 +363,7 @@ fn fenced_code_block_size() {
         assert!(run.code);
         assert_eq!(run.size, Some(20));
         assert_eq!(run.color.as_deref(), Some("444444"));
-        assert_eq!(run.fill.as_deref(), Some("F5F5F5"));
+        assert_eq!(run.fill.as_deref(), None);
     }
 }
 

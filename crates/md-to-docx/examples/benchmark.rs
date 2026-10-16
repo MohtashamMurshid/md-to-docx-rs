@@ -26,7 +26,7 @@ struct Case {
 
 fn cases() -> Vec<Case> {
     let prose = (0..3200).map(|i| format!(
-        "Paragraph {i}: **bold**, *italic*, <u>underline</u>, ~~strike~~ and [a link](https://example.com/{}) with ordinary prose.", i % 25
+        "Paragraph {i}: **bold**, *italic*, ++underline++, ~~strike~~ and [a link](https://example.com/{}) with ordinary prose.", i % 25
     )).collect::<Vec<_>>().join("\n\n");
     let lists = (0..1200)
         .map(|i| {
@@ -206,7 +206,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!(
             "{}",
             json!({
-                "fixture_version": 1, "historical_fixture": false, "case": case.name,
+                "fixture_version": 2, "historical_fixture": false, "case": case.name,
                 "input_chars": case.markdown.chars().count(), "input_bytes": case.markdown.len(),
                 "warmup_ms": warmup, "runs": samples.len(), "median_ms": median,
                 "min_ms": samples[0], "max_ms": samples[samples.len() - 1], "samples_ms": samples,

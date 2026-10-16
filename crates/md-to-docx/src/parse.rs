@@ -1,8 +1,8 @@
 //! Walk pulldown-cmark events into the owned document model.
 
 use pulldown_cmark::{
-    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
-    TextMergeStream,
+    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag,
+    TagEnd,
 };
 
 use std::collections::BTreeMap;
@@ -307,14 +307,248 @@ fn parse_with(
 ) -> Result<Document, MarkdownConversionError> {
     let owned = std::mem::replace(cursor, ParseCursor::new());
     let mut walker = Walker::new(owned);
-    let math_enabled = walker.math_enabled;
-    let events = TextMergeStream::new(Parser::new_ext(markdown, parser_options(math_enabled)));
-    for event in events {
-        walker.on_event(event)?;
-    }
+    feed_events(&mut walker, markdown)?;
     let (document, next) = walker.finish()?;
     *cursor = next;
     Ok(document)
+}
+
+/// Run pulldown-cmark over `markdown` and feed the walker.
+///
+/// Adjacent text and soft line breaks merge into one text node, as in mdast.
+/// Code spans need their source: mdast keeps line endings and only strips one
+/// padding character, while pulldown-cmark normalises them.
+fn feed_events(walker: &mut Walker, markdown: &str) -> Result<(), MarkdownConversionError> {
+    let (math_source, math_language) = protect_math_fences(markdown, walker.math_enabled);
+    let markdown = math_source.as_deref().unwrap_or(markdown);
+    let (protected, links) = protect_source_autolinks(markdown, walker.math_enabled);
+    let markdown = protected.as_deref().unwrap_or(markdown);
+    let parser = Parser::new_ext(markdown, parser_options(walker.math_enabled)).into_offset_iter();
+    let mut pending: Option<String> = None;
+    let mut table_depth = 0usize;
+    let mut flow_math: Option<String> = None;
+    for (event, range) in parser {
+        if let Some(value) = flow_math.as_mut() {
+            match event {
+                Event::Text(text) => value.push_str(&text),
+                Event::End(TagEnd::CodeBlock) => {
+                    let value = flow_math.take().unwrap_or_default();
+                    let source = value.trim_end_matches(['\r', '\n']);
+                    let block = match walker.render_math(source, true)? {
+                        MathPiece::Omml(omml) => Block::DisplayMath { omml },
+                        MathPiece::Text(text) => Block::Paragraph(Paragraph {
+                            children: vec![walker.marks.current().run(text)],
+                        }),
+                    };
+                    walker.add_block(block)?;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if matches!(&event, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language))) if language.as_ref() == math_language && !math_language.is_empty())
+        {
+            if let Some(text) = pending.take() {
+                feed_text(walker, &text, &links)?;
+            }
+            flow_math = Some(String::new());
+            continue;
+        }
+        match event {
+            Event::Text(text) => {
+                pending.get_or_insert_with(String::new).push_str(&text);
+                continue;
+            }
+            Event::SoftBreak => {
+                pending.get_or_insert_with(String::new).push('\n');
+                continue;
+            }
+            Event::Start(Tag::Table(_)) => table_depth += 1,
+            Event::End(TagEnd::Table) => table_depth = table_depth.saturating_sub(1),
+            _ => {}
+        }
+        if let Some(text) = pending.take() {
+            feed_text(walker, &text, &links)?;
+        }
+        let event = match event {
+            Event::Code(_) => {
+                let mut code = mdast_code_text(&markdown[range]);
+                if table_depth > 0 {
+                    // GFM tables unescape `\|` before inline parsing.
+                    code = code.replace("\\|", "|");
+                }
+                Event::Code(code.into())
+            }
+            other => other,
+        };
+        walker.on_event(event)?;
+    }
+    if let Some(text) = pending.take() {
+        feed_text(walker, &text, &links)?;
+    }
+    Ok(())
+}
+
+// A standalone $$ fence interrupts paragraphs in remark-math. Encode it as
+// an opaque code fence so pulldown cannot absorb surrounding text into a
+// setext heading or parse emphasis inside the TeX source.
+fn protect_math_fences(markdown: &str, enabled: bool) -> (Option<String>, String) {
+    if !enabled || !markdown.lines().any(|line| line.trim() == "$$") {
+        return (None, String::new());
+    }
+    let excluded = Parser::new_ext(markdown, parser_options(false))
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            matches!(event, Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)).then_some(range)
+        })
+        .collect::<Vec<_>>();
+    let mut fence = "~~~~~~~~~~~~~~~~".to_string();
+    while markdown.contains(&fence) {
+        fence.push('~');
+    }
+    let mut language = "md-to-docx-math-flow".to_string();
+    while markdown.contains(&language) {
+        language.push('x');
+    }
+    let mut output = String::new();
+    let mut offset = 0;
+    let mut inside = false;
+    let mut changed = false;
+    for line in markdown.split_inclusive('\n') {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        if indent <= 3
+            && line.trim() == "$$"
+            && (inside
+                || !excluded
+                    .iter()
+                    .any(|range| range.contains(&(offset + indent))))
+        {
+            output.push('\n');
+            output.push_str(&fence);
+            if !inside {
+                output.push_str(&language);
+            }
+            output.push('\n');
+            inside = !inside;
+            changed = true;
+        } else {
+            output.push_str(line);
+        }
+        offset += line.len();
+    }
+    (changed.then_some(output), language)
+}
+
+// Micromark recognizes a literal URL before emphasis. Hide those spans from
+// pulldown's emphasis pass and restore link events after tokenization.
+fn protect_source_autolinks(
+    markdown: &str,
+    math_enabled: bool,
+) -> (Option<String>, Vec<(String, crate::autolink::Segment)>) {
+    let candidates = crate::autolink::source_links(markdown)
+        .into_iter()
+        .filter(|(range, segment)| {
+            segment.text.contains(['*', '_', '~', '[', '$', '&'])
+                || markdown[range.end..].starts_with('&')
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return (None, Vec::new());
+    }
+    let mut eligible = Vec::new();
+    let mut excluded = 0usize;
+    for (event, range) in Parser::new_ext(markdown, parser_options(math_enabled)).into_offset_iter()
+    {
+        match event {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. } | Tag::CodeBlock(_)) => excluded += 1,
+            Event::End(TagEnd::Link | TagEnd::Image | TagEnd::CodeBlock) => {
+                excluded = excluded.saturating_sub(1)
+            }
+            Event::Text(_) if excluded == 0 => eligible.push(range),
+            _ => {}
+        }
+    }
+    let mut prefix = "\u{e000}mdlink".to_string();
+    while markdown.contains(&prefix) {
+        prefix.push('x');
+    }
+    let mut output = String::new();
+    let mut links = Vec::new();
+    let mut end = 0;
+    for (range, segment) in candidates {
+        if range.start < end || !eligible.iter().any(|text| text.contains(&range.start)) {
+            continue;
+        }
+        output.push_str(&markdown[end..range.start]);
+        let token = format!("{prefix}{}\u{e001}", links.len());
+        output.push_str(&token);
+        links.push((token, segment));
+        end = range.end;
+    }
+    if links.is_empty() {
+        return (None, links);
+    }
+    output.push_str(&markdown[end..]);
+    (Some(output), links)
+}
+
+fn feed_text(
+    walker: &mut Walker,
+    text: &str,
+    links: &[(String, crate::autolink::Segment)],
+) -> Result<(), MarkdownConversionError> {
+    let mut remaining = text;
+    while let Some((offset, token, segment)) = links
+        .iter()
+        .filter_map(|(token, segment)| remaining.find(token).map(|offset| (offset, token, segment)))
+        .min_by_key(|(offset, _, _)| *offset)
+    {
+        if offset > 0 {
+            walker.on_event(Event::Text(remaining[..offset].to_string().into()))?;
+        }
+        walker.on_start(Tag::Link {
+            link_type: LinkType::Autolink,
+            dest_url: segment.url.clone().unwrap_or_default().into(),
+            title: "".into(),
+            id: "".into(),
+        })?;
+        walker.on_event(Event::Text(segment.text.clone().into()))?;
+        walker.on_end(TagEnd::Link)?;
+        remaining = &remaining[offset + token.len()..];
+    }
+    if !remaining.is_empty() {
+        walker.on_event(Event::Text(remaining.to_string().into()))?;
+    }
+    Ok(())
+}
+
+/// `inlineCode.value` as mdast builds it: the text between the backtick runs,
+/// minus one leading and one trailing space or line ending when both are
+/// present and the span has other content. Interior line endings stay.
+fn mdast_code_text(source: &str) -> String {
+    let ticks = source.bytes().take_while(|byte| *byte == b'`').count();
+    let end = source.len().saturating_sub(ticks).max(ticks);
+    let inner = &source[ticks..end];
+    let lead = if inner.starts_with("\r\n") {
+        2
+    } else if inner.starts_with([' ', '\n', '\r']) {
+        1
+    } else {
+        0
+    };
+    let trail = if inner.ends_with("\r\n") {
+        2
+    } else if inner.ends_with([' ', '\n', '\r']) {
+        1
+    } else {
+        0
+    };
+    let has_data = inner.chars().any(|ch| !matches!(ch, ' ' | '\n' | '\r'));
+    if lead > 0 && trail > 0 && has_data && inner.len() >= lead + trail {
+        inner[lead..inner.len() - trail].to_string()
+    } else {
+        inner.to_string()
+    }
 }
 
 fn parser_options(math_enabled: bool) -> Options {
@@ -427,6 +661,7 @@ fn highlight_pass(options: &ConvertOptions) -> Option<HighlightPass> {
         plain_color: theme_hex(theme, |theme| theme.default.as_deref(), "24292E"),
         fill: theme_hex(theme, |theme| theme.background.as_deref(), "FFFFFF"),
         border: theme_hex(theme, |theme| theme.border.as_deref(), "D0D7DE"),
+        tokenizer: highlighting.tokenizer.clone(),
     })
 }
 
@@ -572,7 +807,7 @@ impl Walker {
             Event::Rule => self.add_block(Block::ThematicBreak),
             Event::TaskListMarker(checked) => self.on_task_marker(checked),
             Event::Html(html) => self.on_html(&html),
-            Event::InlineHtml(_) => Ok(()),
+            Event::InlineHtml(html) => self.on_inline_html(&html),
             Event::FootnoteReference(label) => self.on_footnote_reference(&label),
             Event::InlineMath(text) => self.on_inline_math(&text),
             Event::DisplayMath(text) => self.on_display_math(&text),
@@ -671,9 +906,18 @@ impl Walker {
             Tag::Emphasis => self.push_mark(MarkKind::Italic),
             Tag::Strong => self.push_mark(MarkKind::Bold),
             Tag::Strikethrough => self.push_mark(MarkKind::Strike),
-            Tag::Link { dest_url, .. } => {
-                let url: &str = &dest_url;
-                self.marks.links.push(url.to_string());
+            Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            } => {
+                // mdast prefixes email autolinks with `mailto:`.
+                let url = if link_type == LinkType::Email {
+                    format!("mailto:{dest_url}")
+                } else {
+                    dest_url.to_string()
+                };
+                self.marks.links.push(url);
                 self.sync_marks();
                 Ok(())
             }
@@ -695,22 +939,25 @@ impl Walker {
             Tag::Image {
                 dest_url, title, ..
             } => {
-                if self.in_footnote() || self.in_table_cell() {
-                    self.stack.push(Frame::Skip { depth: 1 });
-                    return Ok(());
-                }
                 self.demote_sole_image();
                 self.demote_display_math();
                 let url: &str = &dest_url;
                 let title: &str = &title;
-                let sole = self.stack.last().is_some_and(|frame| match frame {
-                    Frame::Paragraph {
-                        inline,
-                        image,
-                        display,
-                    } => image.is_none() && display.is_none() && inline.is_blank(),
-                    _ => false,
-                });
+                // A block image is a paragraph whose only child is the image:
+                // not inside emphasis or a link.
+                let unmarked = self.marks.bold == 0
+                    && self.marks.italic == 0
+                    && self.marks.strike == 0
+                    && self.marks.links.is_empty();
+                let sole = unmarked
+                    && self.stack.last().is_some_and(|frame| match frame {
+                        Frame::Paragraph {
+                            inline,
+                            image,
+                            display,
+                        } => image.is_none() && display.is_none() && inline.is_blank(),
+                        _ => false,
+                    });
                 self.stack.push(Frame::ImageAlt {
                     depth: 1,
                     url: url.to_string(),
@@ -779,7 +1026,7 @@ impl Walker {
     }
 
     fn on_text(&mut self, text: &str) -> Result<(), MarkdownConversionError> {
-        if let Some(Frame::Code { value, .. }) = self.stack.last_mut() {
+        if let Some(Frame::Code { value, .. } | Frame::Html { value }) = self.stack.last_mut() {
             value.push_str(text);
             return Ok(());
         }
@@ -795,7 +1042,12 @@ impl Walker {
         self.demote_display_math();
         match self.render_math(source, false)? {
             MathPiece::Omml(omml) => self.current_inline()?.push_math(omml),
-            MathPiece::Text(text) => self.current_inline()?.push_text(&text),
+            MathPiece::Text(text) => {
+                // `unsupportedMathText` is its own text node, so its own run.
+                let inline = self.current_inline()?;
+                let run = inline.marks.run(text);
+                inline.push_run(run);
+            }
         }
         Ok(())
     }
@@ -806,7 +1058,9 @@ impl Walker {
         let source = source.trim();
         match self.render_math(source, true)? {
             MathPiece::Text(text) => {
-                self.current_inline()?.push_text(&text);
+                let inline = self.current_inline()?;
+                let run = inline.marks.run(text);
+                inline.push_run(run);
                 Ok(())
             }
             MathPiece::Omml(omml) => {
@@ -854,12 +1108,25 @@ impl Walker {
             value.push('\n');
             return Ok(());
         }
-        // `[!INFO]` and the next quoted line stay one run, joined by a newline.
-        let newline = self.unsupported_callout_soft_break();
+        // remark keeps the line ending inside the text node.
         self.demote_sole_image();
         self.demote_display_math();
-        self.current_inline()?
-            .push_text(if newline { "\n" } else { " " });
+        self.current_inline()?.push_text("\n");
+        Ok(())
+    }
+
+    /// Raw inline HTML is literal text in the TypeScript renderer: mdast
+    /// `html` nodes fall through to the plain-text branch, as their own node.
+    fn on_inline_html(&mut self, html: &str) -> Result<(), MarkdownConversionError> {
+        if let Some(Frame::Html { value }) = self.stack.last_mut() {
+            value.push_str(html);
+            return Ok(());
+        }
+        self.demote_sole_image();
+        self.demote_display_math();
+        let inline = self.current_inline()?;
+        let run = inline.marks.run(html);
+        inline.push_run(run);
         Ok(())
     }
 
@@ -875,11 +1142,22 @@ impl Walker {
     }
 
     fn on_task_marker(&mut self, checked: bool) -> Result<(), MarkdownConversionError> {
-        let Some(Frame::Item {
+        // A loose item wraps its first line in a paragraph frame.
+        let len = self.stack.len();
+        let index = match self.stack.last() {
+            Some(Frame::Item { .. }) => len - 1,
+            Some(Frame::Paragraph { .. })
+                if len >= 2 && matches!(self.stack[len - 2], Frame::Item { .. }) =>
+            {
+                len - 2
+            }
+            _ => return Err(parse_error("task list marker outside a list item")),
+        };
+        let Frame::Item {
             checked: slot,
             marker,
             ..
-        }) = self.stack.last_mut()
+        } = &mut self.stack[index]
         else {
             return Err(parse_error("task list marker outside a list item"));
         };
@@ -901,7 +1179,13 @@ impl Walker {
         // A reference inside a footnote body stays the source text, even when
         // that id has its own definition.
         if self.in_footnote() {
-            return self.on_text(&format!("[^{label}]"));
+            // Its own text node in mdast, so its own run.
+            self.demote_sole_image();
+            self.demote_display_math();
+            let inline = self.current_inline()?;
+            let run = inline.marks.run(format!("[^{label}]"));
+            inline.push_run(run);
+            return Ok(());
         }
         let label = normalize_footnote_id(label);
         let (id, first) = if let Some(id) = self.footnote_numbers.get(&label) {
@@ -923,12 +1207,6 @@ impl Walker {
         self.stack
             .iter()
             .any(|frame| matches!(frame, Frame::Footnote { .. }))
-    }
-
-    fn in_table_cell(&self) -> bool {
-        self.stack
-            .iter()
-            .any(|frame| matches!(frame, Frame::Cell { .. }))
     }
 
     fn in_image_alt(&self) -> bool {
@@ -993,13 +1271,14 @@ impl Walker {
     ) -> Result<(), MarkdownConversionError> {
         validate_image_text(&alt, title.as_deref())?;
         if self.missing_alt == MissingImageAltText::Throw && alt.trim().is_empty() {
-            return Err(MarkdownConversionError::new(
-                "Missing image alt text in Markdown image; strict accessibility mode requires a non-empty description",
+            return Err(MarkdownConversionError::with_json_context(
+                "Missing image alt text in Markdown image; strict accessibility mode requires a non-empty description", serde_json::json!({"context":"Markdown image","missingImageAltText":"throw"})
             ));
         }
         let loaded = load_markdown_image(&url, &alt, title.as_deref(), &self.images);
         let image = match loaded {
             Ok(loaded) => Image {
+                failure: None,
                 bytes: Some(loaded.bytes).filter(|bytes| !bytes.is_empty()),
                 content_type: loaded.content_type,
                 width_px: loaded.width_px,
@@ -1009,7 +1288,12 @@ impl Walker {
                 url,
             },
             Err(err) if image_error_stops_conversion(&err) => return Err(err),
-            Err(_) => Image {
+            Err(error) => Image {
+                failure: Some(match error.message() {
+                    "Image budget reached (embed limit)" => crate::model::ImageFailure::EmbedLimit,
+                    "Image budget reached" => crate::model::ImageFailure::RemoteBudget,
+                    _ => crate::model::ImageFailure::Unavailable,
+                }),
                 bytes: None,
                 content_type: String::new(),
                 width_px: 0,
@@ -1136,9 +1420,16 @@ impl Walker {
     }
 
     fn finish_quote(&mut self) -> Result<(), MarkdownConversionError> {
-        let Some(Frame::BlockQuote { callout, children }) = self.stack.pop() else {
+        let Some(Frame::BlockQuote {
+            mut callout,
+            mut children,
+        }) = self.stack.pop()
+        else {
             return Err(parse_error("blockquote ended without a blockquote"));
         };
+        if callout.is_none() {
+            strip_inline_callout_marker(&mut callout, &mut children);
+        }
         self.add_block(Block::Blockquote(Blockquote { callout, children }))
     }
 
@@ -1181,7 +1472,15 @@ impl Walker {
         let mut block = CodeBlock::plain(language, value);
         block.colors = Some(pass.colors());
         if let Some(language) = block.language.as_deref() {
-            if pass.allows(language) {
+            if let Some(tokenizer) = &pass.tokenizer {
+                // `tokenizeToRuns`: any failure or unknown language keeps the
+                // plain rendering; an empty span list does too.
+                if let Ok(Some(spans)) = tokenizer.tokenize(&block.value, language) {
+                    if !spans.is_empty() {
+                        block.highlights = spans;
+                    }
+                }
+            } else if pass.allows(language) {
                 let spans = crate::highlight::highlight_code(&block.value, language);
                 if spans.iter().any(|span| span.color.is_some()) {
                     block.highlights = spans;
@@ -1263,12 +1562,7 @@ impl Walker {
     }
 
     fn drive(&mut self, markdown: &str) -> Result<(), MarkdownConversionError> {
-        let math_enabled = self.math_enabled;
-        let events = TextMergeStream::new(Parser::new_ext(markdown, parser_options(math_enabled)));
-        for event in events {
-            self.on_event(event)?;
-        }
-        Ok(())
+        feed_events(self, markdown)
     }
 
     fn detach_child(&mut self) -> Walker {
@@ -1359,10 +1653,13 @@ impl Walker {
             Err(err) if chart.throw_invalid || chart_error_stops_conversion(&err) => {
                 Err(invalid_chart(err))
             }
-            Err(err) => self.add_block(note_paragraph(format!(
-                "[Chart could not be rendered: {}]",
-                err.message()
-            ))),
+            // The failure paragraph is the image placeholder with a chart message.
+            Err(err) => self.add_block(Block::ChartImage {
+                bytes: Vec::new(),
+                width_px: 0,
+                height_px: 0,
+                alt: format!("[Chart could not be rendered: {}]", err.message()),
+            }),
         }
     }
 
@@ -1411,6 +1708,7 @@ impl Walker {
             image.content_type
         };
         self.add_block(Block::Image(Image {
+            failure: None,
             bytes: Some(image.bytes).filter(|bytes| !bytes.is_empty()),
             content_type,
             width_px: image.width_px.unwrap_or(0),
@@ -1429,15 +1727,22 @@ impl Walker {
         mermaid: &MermaidPass,
     ) -> Result<(), MarkdownConversionError> {
         match mermaid.failure {
-            MermaidFailureMode::Throw => Err(MarkdownConversionError::new(match reason {
-                Some(reason) if !reason.is_empty() => {
-                    format!("Failed to render Mermaid diagram: {reason}")
-                }
-                _ => "Failed to render Mermaid diagram".to_string(),
-            })),
-            MermaidFailureMode::Placeholder => self.add_block(note_paragraph(
-                "[Mermaid diagram could not be rendered]".to_string(),
+            MermaidFailureMode::Throw => Err(MarkdownConversionError::with_json_context(
+                match reason {
+                    Some(reason) if !reason.is_empty() => {
+                        format!("Failed to render Mermaid diagram: {reason}")
+                    }
+                    _ => "Failed to render Mermaid diagram".to_string(),
+                },
+                serde_json::json!({"language":"mermaid"}),
             )),
+            // `mermaidCouldNotRenderParagraph` has the image placeholder shape.
+            MermaidFailureMode::Placeholder => self.add_block(Block::ChartImage {
+                bytes: Vec::new(),
+                width_px: 0,
+                height_px: 0,
+                alt: "[Mermaid diagram could not be rendered]".to_string(),
+            }),
             MermaidFailureMode::CodeBlock | MermaidFailureMode::Invalid => self.add_block(
                 Block::CodeBlock(self.paint_code(language, value.to_string())),
             ),
@@ -1587,39 +1892,6 @@ impl Walker {
             ) => Some(inline),
             _ => None,
         }
-    }
-
-    fn inline_ref(&self) -> Option<&InlineBuf> {
-        match self.stack.last() {
-            Some(
-                Frame::Paragraph { inline, .. }
-                | Frame::Heading { inline, .. }
-                | Frame::Cell { inline }
-                | Frame::Item { inline, .. },
-            ) => Some(inline),
-            _ => None,
-        }
-    }
-
-    /// True when this soft break sits in a plain quote whose text so far is
-    /// only an unsupported callout marker, such as `[!INFO]`.
-    fn unsupported_callout_soft_break(&self) -> bool {
-        let in_plain_quote = self
-            .stack
-            .iter()
-            .rev()
-            .find_map(|frame| match frame {
-                Frame::BlockQuote { callout, .. } => Some(callout.is_none()),
-                _ => None,
-            })
-            .unwrap_or(false);
-        if !in_plain_quote {
-            return false;
-        }
-        let Some(inline) = self.inline_ref() else {
-            return false;
-        };
-        inline.runs.is_empty() && is_unsupported_callout_marker(&inline.pending)
     }
 
     fn in_skip(&self) -> bool {
@@ -1772,6 +2044,8 @@ struct InlineBuf {
     runs: Vec<Inline>,
     pending: String,
     marks: Marks,
+    /// Last character of the previous text, for autolink literal detection.
+    last_char: Option<char>,
 }
 
 impl InlineBuf {
@@ -1780,14 +2054,16 @@ impl InlineBuf {
             runs: Vec::new(),
             pending: String::new(),
             marks,
+            last_char: None,
         }
     }
 
+    /// Called at every emphasis, strong, strikethrough, and link boundary.
+    /// mdast keeps the text on each side as separate nodes, so the pending
+    /// text is flushed even when the marks do not change.
     fn set_marks(&mut self, marks: Marks) {
-        if self.marks != marks {
-            self.flush();
-            self.marks = marks;
-        }
+        self.flush();
+        self.marks = marks;
     }
 
     fn push_text(&mut self, text: &str) {
@@ -1858,55 +2134,86 @@ impl InlineBuf {
             return;
         }
         let text = std::mem::take(&mut self.pending);
-        push_text_with_underline(&text, &self.marks, &mut self.runs);
+        let last = text.chars().last();
+        if self.marks.link.is_some() {
+            push_text_with_underline(&text, &self.marks, &mut self.runs);
+        } else {
+            for segment in crate::autolink::split_autolinks(&text, self.last_char) {
+                let Some(url) = segment.url else {
+                    push_text_with_underline(&segment.text, &self.marks, &mut self.runs);
+                    continue;
+                };
+                // `processInlineNodes` glues an autolink whose text is its
+                // URL back onto a preceding `[label](` text node.
+                if segment.text == url {
+                    if let Some(previous) = self.runs.last_mut().filter(|run| {
+                        run.link.is_none()
+                            && run.footnote.is_none()
+                            && run.math_omml.is_none()
+                            && !run.code
+                            && ends_with_open_link(&run.text)
+                    }) {
+                        previous.text.push_str(&url);
+                        continue;
+                    }
+                }
+                let mut marks = self.marks.clone();
+                marks.link = Some(url);
+                push_text_with_underline(&segment.text, &marks, &mut self.runs);
+            }
+        }
+        self.last_char = last;
     }
+}
+
+/// `/\[[^\]]+\]\($/`.
+fn ends_with_open_link(text: &str) -> bool {
+    let Some(before) = text.strip_suffix("](") else {
+        return false;
+    };
+    let Some(open) = before.rfind('[') else {
+        return false;
+    };
+    let label = &before[open + 1..];
+    !label.is_empty() && !label.contains(']')
 }
 
 /// Split on `(\+\+[^+\n][\s\S]*?\+\+)`, the same pattern as
 /// `pushTextWithUnderline` in `src/mdastToDocxModel.ts`.
 fn push_text_with_underline(value: &str, marks: &Marks, out: &mut Vec<Inline>) {
     let bytes = value.as_bytes();
+    let mut parts: Vec<&str> = Vec::new();
     let mut cursor = 0;
     let mut index = 0;
     while index + 4 < bytes.len() {
         if underline_opens_at(bytes, index) {
             if let Some(end) = find_closing_plus(bytes, index + 3) {
-                let matched = &value[index..end];
-                if matched.chars().count() > 4 {
-                    if cursor < index {
-                        out.push(marks.run(&value[cursor..index]));
-                    }
-                    let mut run = marks.run(&value[index + 2..end - 2]);
-                    run.underline = true;
-                    out.push(run);
-                    cursor = end;
-                    index = end;
-                    continue;
+                if cursor < index {
+                    parts.push(&value[cursor..index]);
                 }
+                parts.push(&value[index..end]);
+                cursor = end;
+                index = end;
+                continue;
             }
         }
         index += 1;
     }
     if cursor < value.len() {
-        out.push(marks.run(&value[cursor..]));
+        parts.push(&value[cursor..]);
     }
-}
-
-fn is_unsupported_callout_marker(text: &str) -> bool {
-    let text = text.trim();
-    let Some(name) = text
-        .strip_prefix("[!")
-        .and_then(|rest| rest.strip_suffix(']'))
-    else {
-        return false;
-    };
-    if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_alphabetic()) {
-        return false;
+    // Every part, matched or not, is tested with `startsWith("++") &&
+    // endsWith("++") && length > 4`, so unmatched text wrapped in `++` is
+    // underlined as well.
+    for part in parts {
+        if part.starts_with("++") && part.ends_with("++") && utf16_len(part) > 4 {
+            let mut run = marks.run(&part[2..part.len() - 2]);
+            run.underline = true;
+            out.push(run);
+        } else if !part.is_empty() {
+            out.push(marks.run(part));
+        }
     }
-    !matches!(
-        name.to_ascii_uppercase().as_str(),
-        "NOTE" | "TIP" | "IMPORTANT" | "WARNING" | "CAUTION"
-    )
 }
 
 fn underline_opens_at(bytes: &[u8], index: usize) -> bool {
@@ -2094,8 +2401,11 @@ fn positive_or(value: Option<u32>, default: u32) -> u32 {
     }
 }
 
-fn unsupported_math(_source: &str, _err: MarkdownConversionError) -> MarkdownConversionError {
-    MarkdownConversionError::new("Unsupported math expression")
+fn unsupported_math(source: &str, err: MarkdownConversionError) -> MarkdownConversionError {
+    MarkdownConversionError::with_json_context(
+        "Unsupported math expression",
+        serde_json::json!({"expression":source,"reason":err.message()}),
+    )
 }
 
 fn literal_math(source: &str, display: bool) -> String {
@@ -2119,23 +2429,6 @@ fn math_inline(omml: String) -> Inline {
         cross_ref: None,
         math_omml: Some(omml),
     }
-}
-
-fn note_paragraph(text: String) -> Block {
-    Block::Paragraph(Paragraph {
-        children: vec![Inline {
-            text,
-            bold: false,
-            italic: false,
-            underline: false,
-            strike: false,
-            code: false,
-            link: None,
-            footnote: None,
-            cross_ref: None,
-            math_omml: None,
-        }],
-    })
 }
 
 fn invalid_chart(err: MarkdownConversionError) -> MarkdownConversionError {
@@ -2433,7 +2726,7 @@ fn inlines_have_footnote(runs: &[Inline]) -> bool {
 fn plain_text(runs: &[Inline]) -> String {
     let mut text = String::new();
     for run in runs {
-        if run.footnote.is_none() {
+        if run.footnote.is_none() && !run.text.starts_with(IMAGE_MARK) {
             text.push_str(&run.text);
         }
     }
@@ -2497,7 +2790,13 @@ fn flatten_footnote_table(table: Table) -> Vec<Block> {
         .map(|row| {
             let text = row
                 .iter()
-                .map(|cell| plain_text(&cell.children))
+                .map(|cell| {
+                    if cell.blocks.is_empty() {
+                        plain_text(&cell.children)
+                    } else {
+                        "[Rich table cell]".to_string()
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(" | ");
             Block::Paragraph(Paragraph {
@@ -2532,7 +2831,18 @@ fn inline_image_run(image: &Image) -> Inline {
             };
             format!("{IMAGE_MARK}data:{mime};base64,{}", base64_encode(bytes))
         }
-        _ => placeholder_text(&image.alt),
+        // An empty URL tells the writer this inline image failed to load;
+        // it then writes the bare placeholder run.
+        _ => format!(
+            "{IMAGE_MARK}{}{IMAGE_MARK}{}{IMAGE_MARK}{}",
+            if image.failure == Some(crate::model::ImageFailure::EmbedLimit) {
+                "!limit"
+            } else {
+                ""
+            },
+            image.alt,
+            image.title.as_deref().unwrap_or("")
+        ),
     };
     Inline {
         text,
@@ -2548,12 +2858,82 @@ fn inline_image_run(image: &Image) -> Inline {
     }
 }
 
-fn placeholder_text(alt: &str) -> String {
-    if alt.is_empty() {
-        "[Image could not be displayed]".to_string()
-    } else {
-        format!("[Image could not be displayed: {alt}]")
+/// `stripGithubCalloutMarker`: a quote whose first paragraph starts with a
+/// plain `[!NOTE]`-style marker is a callout even when text follows the
+/// marker on the same line. The marker, trailing blanks, and one line ending
+/// with its indentation are removed; an emptied paragraph is dropped.
+fn strip_inline_callout_marker(callout: &mut Option<CalloutKind>, children: &mut Vec<Block>) {
+    let Some(Block::Paragraph(paragraph)) = children.first_mut() else {
+        return;
+    };
+    let Some(first) = paragraph.children.first_mut() else {
+        return;
+    };
+    let plain = !first.bold
+        && !first.italic
+        && !first.underline
+        && !first.strike
+        && !first.code
+        && first.link.is_none()
+        && first.footnote.is_none()
+        && first.cross_ref.is_none()
+        && first.math_omml.is_none()
+        && !first.text.starts_with(IMAGE_MARK);
+    if !plain {
+        return;
     }
+    let Some((kind, consumed)) = match_callout_marker(&first.text) else {
+        return;
+    };
+    *callout = Some(kind);
+    let rest = first.text[consumed..].to_string();
+    if rest.is_empty() {
+        paragraph.children.remove(0);
+        if paragraph.children.is_empty() {
+            children.remove(0);
+        }
+    } else {
+        first.text = rest;
+    }
+}
+
+/// `^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\r?\n[ \t]*)?`,
+/// case-insensitive. Returns the kind and the matched length.
+fn match_callout_marker(text: &str) -> Option<(CalloutKind, usize)> {
+    let mut index = 0;
+    while let Some(ch) = text[index..].chars().next() {
+        if js_space(ch) {
+            index += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    let rest = text[index..].strip_prefix("[!")?;
+    index += 2;
+    let close = rest.find(']')?;
+    let kind = match rest[..close].to_ascii_uppercase().as_str() {
+        "NOTE" => CalloutKind::Note,
+        "TIP" => CalloutKind::Tip,
+        "IMPORTANT" => CalloutKind::Important,
+        "WARNING" => CalloutKind::Warning,
+        "CAUTION" => CalloutKind::Caution,
+        _ => return None,
+    };
+    index += close + 1;
+    let bytes = text.as_bytes();
+    let blanks = |mut at: usize| {
+        while matches!(bytes.get(at), Some(b' ' | b'\t')) {
+            at += 1;
+        }
+        at
+    };
+    index = blanks(index);
+    if bytes.get(index) == Some(&b'\r') && bytes.get(index + 1) == Some(&b'\n') {
+        index = blanks(index + 2);
+    } else if bytes.get(index) == Some(&b'\n') {
+        index = blanks(index + 1);
+    }
+    Some((kind, index))
 }
 
 fn image_error_stops_conversion(err: &MarkdownConversionError) -> bool {
@@ -2582,9 +2962,10 @@ fn validate_ooxml_text(
         )));
     }
     if value.chars().any(invalid_ooxml_char) {
-        return Err(MarkdownConversionError::new(format!(
-            "{context} contains characters that are not valid in OOXML"
-        )));
+        return Err(MarkdownConversionError::with_json_context(
+            format!("{context} contains characters that are not valid in OOXML"),
+            serde_json::json!({"context":context}),
+        ));
     }
     Ok(())
 }
@@ -3049,9 +3430,10 @@ fn expand_run(
         match book.get(&id) {
             Some(cross) => out.push(cross_run(cross)),
             None if throw => {
-                return Err(MarkdownConversionError::new(format!(
-                    "Unresolved cross-reference: {id}"
-                )));
+                return Err(MarkdownConversionError::with_json_context(
+                    format!("Unresolved cross-reference: {id}"),
+                    serde_json::json!({"identifier":id}),
+                ));
             }
             None => {
                 let mut piece = run.clone();
@@ -3127,6 +3509,7 @@ struct HighlightPass {
     plain_color: String,
     fill: String,
     border: String,
+    tokenizer: Option<crate::options::HighlightTokenizer>,
 }
 
 impl HighlightPass {
@@ -3524,8 +3907,9 @@ fn count_inlines(
 fn bump(count: &mut u64, max: u64) -> Result<(), MarkdownConversionError> {
     *count += 1;
     if *count > max {
-        return Err(MarkdownConversionError::new(
+        return Err(MarkdownConversionError::with_json_context(
             "Markdown element count exceeds maxElements",
+            serde_json::json!({"elementCount":*count,"maxElements":max}),
         ));
     }
     Ok(())
@@ -3605,8 +3989,9 @@ mod tests {
             .iter()
             .any(|run| run.text == "code" && run.code && !run.underline));
 
+        // Soft breaks stay line endings inside the text node, as in mdast.
         let broken = paragraph_runs(&doc.children[1]);
-        assert_eq!(run_text(broken), "foo bar\nbaz");
+        assert_eq!(run_text(broken), "foo\nbar\nbaz");
         assert!(broken.iter().any(|run| run.text == "\n"));
     }
 
@@ -3622,7 +4007,7 @@ mod tests {
             .any(|run| run.text == "++no++" && run.code && !run.underline));
         let wrapped = paragraph_runs(&doc.children[1]);
         assert_eq!(wrapped.len(), 1);
-        assert_eq!(wrapped[0].text, "hello world");
+        assert_eq!(wrapped[0].text, "hello\nworld");
         assert!(wrapped[0].underline);
     }
 

@@ -1,0 +1,98 @@
+{
+  "date": "2026-10-17",
+  "environment": {
+    "platform": "macOS ARM64",
+    "node": "24.18.0",
+    "rustc": "1.99.0"
+  },
+  "reference": {
+    "package": "@mohtasham/md-to-docx",
+    "version": "4.0.1"
+  },
+  "corpus": {
+    "total": 1754,
+    "commonmark": 652,
+    "gfm": 677,
+    "custom": 91,
+    "expanded": 334,
+    "seeded_random_in_expanded": 150,
+    "sha256": {
+      "commonmark.json": "d431b29d97b6f73e69d547109cf5081578fac931e72afe95639ebe766c1b2a20",
+      "custom.mjs": "8a0090ac7c563dabacf49e7cabf9e793c8ff3b7566f5850145fd87887bbc9083",
+      "custom2.mjs": "7d112568cde3fa3862cab1f783924713286f2ceba1769a3eb11e1a22ca0fe8df",
+      "gfm.json": "b2c526cc2803ac07d864774b5a879930c1a4083915083150f11dbc571d084443"
+    }
+  },
+  "strict_canonical_packages_matching": 1745,
+  "decoded_png_canonical_packages_matching": 1748,
+  "unexpected_differences": 0,
+  "known_differences": [
+    {
+      "name": "x-images-block",
+      "kind": "png-encoding",
+      "reason": "Rasterized SVG PNG bytes differ; decoded RGBA pixels match."
+    },
+    {
+      "name": "x-chart",
+      "kind": "png-encoding",
+      "reason": "Chart PNG bytes differ; decoded RGBA pixels match."
+    },
+    {
+      "name": "x-chart-line",
+      "kind": "png-encoding",
+      "reason": "Chart PNG bytes differ; decoded RGBA pixels match."
+    },
+    {
+      "name": "x-chart-invalid",
+      "kind": "chart-json-diagnostic",
+      "reason": "V8 JSON.parse diagnostic differs from the native JSON diagnostic in the chart placeholder."
+    },
+    {
+      "name": "x-chart-invalid-preserve",
+      "kind": "chart-json-diagnostic",
+      "reason": "V8 JSON.parse diagnostic differs from the native JSON diagnostic in the chart placeholder."
+    },
+    {
+      "name": "y-err-chart-throw",
+      "kind": "chart-json-diagnostic",
+      "reason": "V8 JSON.parse diagnostic differs from the native JSON diagnostic in the thrown chart error."
+    },
+    {
+      "name": "y-replacements-empty-find",
+      "kind": "upstream-process-failure",
+      "reason": "TypeScript loops on an empty search string and exhausts its heap. Rust treats the pattern as a no-op."
+    },
+    {
+      "name": "y-footnotes-in-heading-list-quote-table",
+      "kind": "upstream-heading-footnote",
+      "reason": "TypeScript writes a bookmarkUniqueNumericId element containing a function string in a heading. Rust writes a footnote reference with a valid bookmark."
+    },
+    {
+      "name": "y-links-variants",
+      "kind": "upstream-empty-fragment",
+      "reason": "For a bare # target, TypeScript writes a dangling relationship ID. Rust writes an empty internal anchor."
+    }
+  ],
+  "checks": {
+    "rust_tests_passed": 371,
+    "node_tests_passed": 24,
+    "comparator_tests_passed": 6,
+    "typecheck": "passed",
+    "format": "passed",
+    "clippy": "passed with warnings denied",
+    "release_benchmark_smoke": "five cases passed with one measured run",
+    "node_versions_tested": [
+      "20.10.0",
+      "22.14.0",
+      "24.18.0"
+    ],
+    "error_contract_cases": 81,
+    "release_benchmark_output_checks": 35
+  },
+  "limits": [
+    "Canonical package comparison excludes ZIP compression and generated timestamps.",
+    "Error names, messages and JSON context types are compared. The reviewed native/V8 chart diagnostic still differs.",
+    "Node highlighting uses lowlight callbacks; Rust and CLI use Syntect.",
+    "Word visual checks cover six separate consumer/reference cases. LibreOffice and hosted OS matrix were not run."
+  ]
+}

@@ -74,7 +74,7 @@ fn highlighting(enabled: bool) -> ConvertOptions {
 fn code_paragraph<'a>(doc: &'a Document, needle: &str) -> &'a Paragraph {
     doc.paragraphs()
         .into_iter()
-        .find(|paragraph| paragraph.text.contains(needle))
+        .find(|paragraph| paragraph.text.replace('\u{a0}', " ").contains(needle))
         .unwrap_or_else(|| panic!("no paragraph contains {needle:?}\n{}", doc.render()))
 }
 

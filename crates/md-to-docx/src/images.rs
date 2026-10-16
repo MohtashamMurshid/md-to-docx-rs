@@ -242,7 +242,7 @@ pub fn load_markdown_image(
     let source = strip_fragment(source);
     let remote_attempt = !is_data_url(source);
     if options.embedded_images.load(Ordering::SeqCst) >= options.max_images {
-        return Err(conversion_error("Image budget reached"));
+        return Err(conversion_error("Image budget reached (embed limit)"));
     }
     if remote_attempt && options.failed_remote_attempts.load(Ordering::SeqCst) >= options.max_images
     {
@@ -314,11 +314,9 @@ fn finish_image(
         return Err(conversion_error("Invalid image data: data length is 0"));
     }
     let kind = detect_image_type(bytes).ok_or_else(|| unsupported_image(hint, source))?;
-    let (width, height) =
-        read_dimensions(kind, bytes).ok_or_else(|| unsupported_image(hint, source))?;
-    if width == 0 || height == 0 {
-        return Err(unsupported_image(hint, source));
-    }
+    // Like `readIntrinsicDimensions`, unknown dimensions are not an error:
+    // the writer falls back to a 200 pixel wide drawing. Zero means unknown.
+    let (width, height) = read_dimensions(kind, bytes).unwrap_or((0, 0));
     Ok(LoadedImage {
         bytes: bytes.to_vec(),
         content_type: kind.mime().to_string(),

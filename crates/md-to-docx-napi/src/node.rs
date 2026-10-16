@@ -33,7 +33,7 @@ impl Task for ConversionTask {
                 Status::GenericFailure,
                 format!(
                     "MD_TO_DOCX_ERROR:{}",
-                    serde_json::json!({"message": error.message(), "context": error.context()})
+                    serde_json::json!({"message": error.message(), "context": error.context_json()})
                 ),
             )
         })
@@ -276,6 +276,31 @@ fn install_callbacks(
             },
         ));
     }
+    if enabled["highlight"].as_bool() == Some(true) {
+        let callback = callback.clone();
+        options
+            .code_highlighting
+            .get_or_insert_with(Default::default)
+            .tokenizer = Some(md_to_docx::options::HighlightTokenizer::new(
+            move |code, language| {
+                let value = call_callback(
+                    &callback,
+                    serde_json::json!({"kind":"highlight", "code":code, "language":language}),
+                )?;
+                let Some(items) = value.as_array() else {
+                    return Ok(None);
+                };
+                let spans = items
+                    .iter()
+                    .map(|item| md_to_docx::highlight::HighlightSpan {
+                        text: item["text"].as_str().unwrap_or("").to_owned(),
+                        color: item["color"].as_str().map(str::to_owned),
+                    })
+                    .collect();
+                Ok(Some(spans))
+            },
+        ));
+    }
     if enabled["mermaid"].as_bool() == Some(true) {
         options
             .mermaid_rendering
@@ -358,7 +383,7 @@ pub fn convert_with_callbacks<'env>(
                 Status::GenericFailure,
                 format!(
                     "MD_TO_DOCX_ERROR:{}",
-                    serde_json::json!({"message":error.message(), "context":error.context()})
+                    serde_json::json!({"message":error.message(), "context":error.context_json()})
                 ),
             )),
             Err(_) => deferred.reject(Error::new(
